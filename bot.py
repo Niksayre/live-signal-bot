@@ -3,12 +3,11 @@ import time
 import requests
 import pandas as pd
 
-from telegram import Bot
 from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
 from datetime import datetime, timedelta
 
-print("LIVE SIGNAL BOT STARTED")
+print("REAL FOREX SIGNAL BOT STARTED")
 
 # =========================================
 # ENV VARIABLES
@@ -21,18 +20,12 @@ API_KEY = os.getenv("API_KEY")
 print("TOKEN LOADED")
 
 # =========================================
-# TELEGRAM BOT
-# =========================================
-
-bot = Bot(token=BOT_TOKEN)
-
-# =========================================
-# PAIRS
+# REAL FOREX PAIRS
 # =========================================
 
 pairs = [
-    "GBP/JPY",
     "EUR/USD",
+    "GBP/JPY",
     "USD/JPY",
     "EUR/JPY"
 ]
@@ -78,7 +71,7 @@ def get_data(symbol, timeframe):
             f"https://api.twelvedata.com/time_series"
             f"?symbol={symbol}"
             f"&interval={timeframe}"
-            f"&outputsize=100"
+            f"&outputsize=200"
             f"&apikey={API_KEY}"
         )
 
@@ -107,7 +100,7 @@ def get_data(symbol, timeframe):
         return None
 
 # =========================================
-# STRATEGY
+# HIGH ACCURACY STRATEGY
 # =========================================
 
 def generate_signal(df):
@@ -135,10 +128,12 @@ def generate_signal(df):
 
         last_ema9 = ema9.iloc[-1]
         last_ema21 = ema21.iloc[-1]
+
         last_rsi = rsi.iloc[-1]
+
         last_macd = macd.iloc[-1]
 
-        # CALL
+        # STRONG BUY
 
         if (
             last_ema9 > last_ema21
@@ -146,9 +141,9 @@ def generate_signal(df):
             and last_macd > 0
         ):
 
-            return "CALL"
+            return "BUY"
 
-        # PUT
+        # STRONG SELL
 
         elif (
             last_ema9 < last_ema21
@@ -156,7 +151,7 @@ def generate_signal(df):
             and last_macd < 0
         ):
 
-            return "PUT"
+            return "SELL"
 
         return None
 
@@ -167,19 +162,19 @@ def generate_signal(df):
         return None
 
 # =========================================
-# RESULT CHECK
+# CHECK RESULT
 # =========================================
 
 def check_result(before_price, after_price, signal):
 
-    if signal == "CALL":
+    if signal == "BUY":
 
         if after_price > before_price:
             return "WIN"
 
         return "LOSS"
 
-    elif signal == "PUT":
+    elif signal == "SELL":
 
         if after_price < before_price:
             return "WIN"
@@ -189,7 +184,22 @@ def check_result(before_price, after_price, signal):
     return "LOSS"
 
 # =========================================
-# PROCESS TRADE
+# EXACT CANDLE TIME
+# =========================================
+
+def next_minute_time():
+
+    now = datetime.now()
+
+    next_min = (
+        now.replace(second=0, microsecond=0)
+        + timedelta(minutes=1)
+    )
+
+    return next_min
+
+# =========================================
+# PROCESS SIGNAL
 # =========================================
 
 def process_trade(pair, timeframe, duration):
@@ -213,25 +223,23 @@ def process_trade(pair, timeframe, duration):
 
             return
 
-        pair_name = pair.replace("/", "") + "-OTC"
+        total_signal += 1
 
-        now = datetime.now()
+        pair_name = pair.replace("/", "")
 
         # =====================================
-        # SIGNAL 1 MIN BEFORE ENTRY
+        # EXACT ENTRY TIME
         # =====================================
 
-        signal_time = now.strftime("%H:%M:%S")
-
-        entry_dt = now + timedelta(minutes=1)
-
-        entry_time = entry_dt.strftime("%H:%M:%S")
+        entry_dt = next_minute_time()
 
         exit_dt = entry_dt + timedelta(seconds=duration)
 
-        exit_time = exit_dt.strftime("%H:%M:%S")
+        signal_time = datetime.now().strftime("%H:%M:%S")
 
-        total_signal += 1
+        entry_time = entry_dt.strftime("%H:%M:00")
+
+        exit_time = exit_dt.strftime("%H:%M:00")
 
         # =====================================
         # SEND SIGNAL
@@ -250,7 +258,7 @@ Exit ⏳ {exit_time}
 
 ⌚️ {timeframe.upper()}
 
-{"🟢 CALL" if signal == "CALL" else "🔴 PUT"}
+{"🟢 BUY" if signal == "BUY" else "🔴 SELL"}
 """
 
         send_message(signal_message)
@@ -258,10 +266,12 @@ Exit ⏳ {exit_time}
         print("SIGNAL SENT:", pair_name)
 
         # =====================================
-        # WAIT EXACTLY 1 MINUTE
+        # WAIT UNTIL ENTRY TIME
         # =====================================
 
-        time.sleep(60)
+        while datetime.now() < entry_dt:
+
+            time.sleep(1)
 
         # =====================================
         # ENTRY PRICE
@@ -274,10 +284,10 @@ Exit ⏳ {exit_time}
 
         before_price = before_df["close"].iloc[-1]
 
-        print("ENTRY PRICE:", before_price)
+        print("ENTRY:", before_price)
 
         # =====================================
-        # WAIT TRADE DURATION
+        # WAIT TRADE TIME
         # =====================================
 
         time.sleep(duration)
@@ -293,7 +303,7 @@ Exit ⏳ {exit_time}
 
         after_price = after_df["close"].iloc[-1]
 
-        print("EXIT PRICE:", after_price)
+        print("EXIT:", after_price)
 
         # =====================================
         # RESULT
@@ -314,7 +324,7 @@ Exit ⏳ {exit_time}
             total_loss += 1
 
         # =====================================
-        # SEND RESULT
+        # RESULT MESSAGE
         # =====================================
 
         result_message = f"""
@@ -332,7 +342,7 @@ Exit ⏳ {exit_time}
         print("RESULT SENT")
 
         # =====================================
-        # SEND SUMMARY
+        # SUMMARY
         # =====================================
 
         summary_message = f"""
@@ -352,7 +362,7 @@ Total Loss: {total_loss}
         print("SUMMARY SENT")
 
         # =====================================
-        # WAIT BEFORE NEXT TRADE
+        # WAIT BEFORE NEXT SIGNAL
         # =====================================
 
         time.sleep(10)
@@ -369,9 +379,9 @@ while True:
 
     try:
 
-        print("CHECKING MARKET")
+        print("CHECKING REAL FOREX MARKET")
 
-        # M1
+        # 1 MIN
 
         for pair in pairs:
 
@@ -381,7 +391,7 @@ while True:
                 duration=60
             )
 
-        # M2
+        # 2 MIN
 
         for pair in pairs:
 
@@ -391,7 +401,7 @@ while True:
                 duration=120
             )
 
-        # M5
+        # 5 MIN
 
         for pair in pairs:
 
