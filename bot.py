@@ -9,36 +9,31 @@ from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from datetime import datetime
 
-# =========================================
+# =====================================
 # ENVIRONMENT VARIABLES
-# =========================================
+# =====================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
-# =========================================
+# =====================================
 # CHECK VARIABLES
-# =========================================
+# =====================================
 
-if not BOT_TOKEN:
-    print("ERROR: BOT_TOKEN missing")
+print("BOT TOKEN:", BOT_TOKEN)
+print("CHANNEL ID:", CHANNEL_ID)
+print("API KEY:", API_KEY)
 
-if not CHANNEL_ID:
-    print("ERROR: CHANNEL_ID missing")
-
-if not API_KEY:
-    print("ERROR: API_KEY missing")
-
-# =========================================
+# =====================================
 # TELEGRAM BOT
-# =========================================
+# =====================================
 
 bot = Bot(token=BOT_TOKEN)
 
-# =========================================
+# =====================================
 # FOREX PAIRS
-# =========================================
+# =====================================
 
 pairs = [
     "GBP/JPY",
@@ -47,17 +42,17 @@ pairs = [
     "EUR/JPY"
 ]
 
-# =========================================
-# SUMMARY VARIABLES
-# =========================================
+# =====================================
+# SUMMARY
+# =====================================
 
 total_signal = 0
 total_win = 0
 total_loss = 0
 
-# =========================================
+# =====================================
 # GET LIVE MARKET DATA
-# =========================================
+# =====================================
 
 def get_data(symbol):
 
@@ -77,16 +72,14 @@ def get_data(symbol):
 
         if "values" not in data:
 
-            print(f"NO DATA FOR {symbol}")
+            print("NO DATA:", symbol)
 
             return None
 
         df = pd.DataFrame(data["values"])
 
-        # Reverse dataframe
         df = df.iloc[::-1]
 
-        # Convert close prices to float
         df["close"] = df["close"].astype(float)
 
         return df
@@ -97,9 +90,9 @@ def get_data(symbol):
 
         return None
 
-# =========================================
+# =====================================
 # GENERATE SIGNAL
-# =========================================
+# =====================================
 
 def generate_signal(df):
 
@@ -124,7 +117,7 @@ def generate_signal(df):
         last_ema21 = ema21.iloc[-1]
         last_rsi = rsi.iloc[-1]
 
-        # CALL CONDITION
+        # CALL SIGNAL
 
         if (
             last_ema9 > last_ema21
@@ -133,7 +126,7 @@ def generate_signal(df):
 
             return "CALL"
 
-        # PUT CONDITION
+        # PUT SIGNAL
 
         elif (
             last_ema9 < last_ema21
@@ -150,9 +143,9 @@ def generate_signal(df):
 
         return None
 
-# =========================================
+# =====================================
 # CHECK RESULT
-# =========================================
+# =====================================
 
 def check_result(before_price, after_price, signal):
 
@@ -178,13 +171,13 @@ def check_result(before_price, after_price, signal):
 
     except Exception as e:
 
-        print("CHECK RESULT ERROR:", e)
+        print("RESULT ERROR:", e)
 
         return "LOSS"
 
-# =========================================
-# SEND TELEGRAM SIGNAL
-# =========================================
+# =====================================
+# SEND TELEGRAM MESSAGE
+# =====================================
 
 def send_signal(pair, signal):
 
@@ -196,21 +189,19 @@ def send_signal(pair, signal):
 
         total_signal += 1
 
-        current_time = datetime.now()
+        now = datetime.now()
 
-        entry_time = current_time.strftime("%H:%M")
-
-        exit_timestamp = current_time.timestamp() + 60
+        entry_time = now.strftime("%H:%M")
 
         exit_time = datetime.fromtimestamp(
-            exit_timestamp
+            now.timestamp() + 60
         ).strftime("%H:%M")
 
         pair_name = pair.replace("/", "") + "-OTC"
 
-        # =====================================
+        # =================================
         # ENTRY MESSAGE
-        # =====================================
+        # =================================
 
         entry_message = f"""
 🚧 LIVE SIGNAL
@@ -230,11 +221,11 @@ Exit ⏳ {exit_time}
             text=entry_message
         )
 
-        print(f"SIGNAL SENT: {pair_name} {signal}")
+        print("SIGNAL SENT")
 
-        # =====================================
-        # BEFORE PRICE
-        # =====================================
+        # =================================
+        # GET BEFORE PRICE
+        # =================================
 
         before_df = get_data(pair)
 
@@ -243,15 +234,13 @@ Exit ⏳ {exit_time}
 
         before_price = before_df["close"].iloc[-1]
 
-        # =====================================
         # WAIT 1 MINUTE
-        # =====================================
 
         time.sleep(60)
 
-        # =====================================
-        # AFTER PRICE
-        # =====================================
+        # =================================
+        # GET AFTER PRICE
+        # =================================
 
         after_df = get_data(pair)
 
@@ -260,9 +249,9 @@ Exit ⏳ {exit_time}
 
         after_price = after_df["close"].iloc[-1]
 
-        # =====================================
+        # =================================
         # RESULT
-        # =====================================
+        # =================================
 
         result = check_result(
             before_price,
@@ -278,9 +267,9 @@ Exit ⏳ {exit_time}
 
             total_loss += 1
 
-        # =====================================
+        # =================================
         # RESULT MESSAGE
-        # =====================================
+        # =================================
 
         result_message = f"""
 ✅ RESULT
@@ -305,15 +294,15 @@ Total Loss: {total_loss}
             text=result_message
         )
 
-        print(f"RESULT SENT: {result}")
+        print("RESULT SENT")
 
     except Exception as e:
 
         print("SEND SIGNAL ERROR:", e)
 
-# =========================================
+# =====================================
 # MAIN LOOP
-# =========================================
+# =====================================
 
 def run_bot():
 
@@ -325,13 +314,11 @@ def run_bot():
 
             for pair in pairs:
 
-                print(f"CHECKING {pair}")
+                print("CHECKING:", pair)
 
                 df = get_data(pair)
 
                 if df is None:
-
-                    print("NO DATA")
 
                     continue
 
@@ -345,9 +332,7 @@ def run_bot():
 
                 else:
 
-                    print(f"NO SIGNAL FOR {pair}")
-
-            # Wait before next cycle
+                    print("NO SIGNAL")
 
             time.sleep(30)
 
@@ -357,9 +342,9 @@ def run_bot():
 
             time.sleep(15)
 
-# =========================================
+# =====================================
 # START THREAD
-# =========================================
+# =====================================
 
 thread = threading.Thread(
     target=run_bot
@@ -367,9 +352,9 @@ thread = threading.Thread(
 
 thread.start()
 
-# =========================================
-# KEEP PROGRAM RUNNING
-# =========================================
+# =====================================
+# KEEP RUNNING
+# =====================================
 
 while True:
 
