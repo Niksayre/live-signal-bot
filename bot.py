@@ -18,13 +18,26 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
 # =========================================
+# CHECK VARIABLES
+# =========================================
+
+if not BOT_TOKEN:
+    print("ERROR: BOT_TOKEN missing")
+
+if not CHANNEL_ID:
+    print("ERROR: CHANNEL_ID missing")
+
+if not API_KEY:
+    print("ERROR: API_KEY missing")
+
+# =========================================
 # TELEGRAM BOT
 # =========================================
 
 bot = Bot(token=BOT_TOKEN)
 
 # =========================================
-# PAIRS
+# FOREX PAIRS
 # =========================================
 
 pairs = [
@@ -43,7 +56,7 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# GET MARKET DATA
+# GET LIVE MARKET DATA
 # =========================================
 
 def get_data(symbol):
@@ -63,25 +76,29 @@ def get_data(symbol):
         data = response.json()
 
         if "values" not in data:
+
             print(f"NO DATA FOR {symbol}")
+
             return None
 
         df = pd.DataFrame(data["values"])
 
+        # Reverse dataframe
         df = df.iloc[::-1]
 
+        # Convert close prices to float
         df["close"] = df["close"].astype(float)
 
         return df
 
     except Exception as e:
 
-        print("DATA ERROR:", e)
+        print("GET DATA ERROR:", e)
 
         return None
 
 # =========================================
-# SIGNAL STRATEGY
+# GENERATE SIGNAL
 # =========================================
 
 def generate_signal(df):
@@ -107,7 +124,7 @@ def generate_signal(df):
         last_ema21 = ema21.iloc[-1]
         last_rsi = rsi.iloc[-1]
 
-        # CALL SIGNAL
+        # CALL CONDITION
 
         if (
             last_ema9 > last_ema21
@@ -116,7 +133,7 @@ def generate_signal(df):
 
             return "CALL"
 
-        # PUT SIGNAL
+        # PUT CONDITION
 
         elif (
             last_ema9 < last_ema21
@@ -134,7 +151,7 @@ def generate_signal(df):
         return None
 
 # =========================================
-# CHECK WIN OR LOSS
+# CHECK RESULT
 # =========================================
 
 def check_result(before_price, after_price, signal):
@@ -157,14 +174,16 @@ def check_result(before_price, after_price, signal):
             else:
                 return "LOSS"
 
+        return "LOSS"
+
     except Exception as e:
 
-        print("RESULT ERROR:", e)
+        print("CHECK RESULT ERROR:", e)
 
         return "LOSS"
 
 # =========================================
-# SEND SIGNAL
+# SEND TELEGRAM SIGNAL
 # =========================================
 
 def send_signal(pair, signal):
@@ -190,10 +209,10 @@ def send_signal(pair, signal):
         pair_name = pair.replace("/", "") + "-OTC"
 
         # =====================================
-        # SEND ENTRY SIGNAL
+        # ENTRY MESSAGE
         # =====================================
 
-        signal_message = f"""
+        entry_message = f"""
 🚧 LIVE SIGNAL
 
 💷 {pair_name}
@@ -208,13 +227,13 @@ Exit ⏳ {exit_time}
 
         bot.send_message(
             chat_id=CHANNEL_ID,
-            text=signal_message
+            text=entry_message
         )
 
         print(f"SIGNAL SENT: {pair_name} {signal}")
 
         # =====================================
-        # GET BEFORE PRICE
+        # BEFORE PRICE
         # =====================================
 
         before_df = get_data(pair)
@@ -231,7 +250,7 @@ Exit ⏳ {exit_time}
         time.sleep(60)
 
         # =====================================
-        # GET AFTER PRICE
+        # AFTER PRICE
         # =====================================
 
         after_df = get_data(pair)
@@ -242,7 +261,7 @@ Exit ⏳ {exit_time}
         after_price = after_df["close"].iloc[-1]
 
         # =====================================
-        # CHECK RESULT
+        # RESULT
         # =====================================
 
         result = check_result(
@@ -293,7 +312,7 @@ Total Loss: {total_loss}
         print("SEND SIGNAL ERROR:", e)
 
 # =========================================
-# MAIN BOT LOOP
+# MAIN LOOP
 # =========================================
 
 def run_bot():
@@ -306,7 +325,7 @@ def run_bot():
 
             for pair in pairs:
 
-                print(f"CHECKING: {pair}")
+                print(f"CHECKING {pair}")
 
                 df = get_data(pair)
 
@@ -328,7 +347,7 @@ def run_bot():
 
                     print(f"NO SIGNAL FOR {pair}")
 
-            # WAIT BEFORE NEXT CHECK
+            # Wait before next cycle
 
             time.sleep(30)
 
