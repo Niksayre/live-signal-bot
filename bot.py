@@ -5,14 +5,18 @@ import requests
 import pandas as pd
 
 from telegram import Bot
-from ta.trend import EMAIndicator
+from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
-from datetime import datetime
-
-print("BOT STARTED SUCCESSFULLY")
+from datetime import datetime, timedelta
 
 # =========================================
-# ENVIRONMENT VARIABLES
+# START
+# =========================================
+
+print("LIVE SIGNAL BOT STARTED")
+
+# =========================================
+# ENV VARIABLES
 # =========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -23,13 +27,13 @@ print("BOT TOKEN LOADED")
 print("CHANNEL ID:", CHANNEL_ID)
 
 # =========================================
-# TELEGRAM BOT
+# TELEGRAM
 # =========================================
 
 bot = Bot(token=BOT_TOKEN)
 
 # =========================================
-# FOREX PAIRS
+# PAIRS
 # =========================================
 
 pairs = [
@@ -40,7 +44,7 @@ pairs = [
 ]
 
 # =========================================
-# SUMMARY VARIABLES
+# SUMMARY
 # =========================================
 
 total_signal = 0
@@ -48,18 +52,35 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# GET LIVE MARKET DATA
+# TELEGRAM SEND
 # =========================================
 
-def get_data(symbol):
+async def send_message(text):
+
+    try:
+
+        await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text
+        )
+
+    except Exception as e:
+
+        print("TELEGRAM ERROR:", e)
+
+# =========================================
+# GET MARKET DATA
+# =========================================
+
+def get_data(symbol, interval):
 
     try:
 
         url = (
             f"https://api.twelvedata.com/time_series"
             f"?symbol={symbol}"
-            f"&interval=1min"
-            f"&outputsize=100"
+            f"&interval={interval}"
+            f"&outputsize=150"
             f"&apikey={API_KEY}"
         )
 
@@ -83,12 +104,12 @@ def get_data(symbol):
 
     except Exception as e:
 
-        print("GET DATA ERROR:", e)
+        print("DATA ERROR:", e)
 
         return None
 
 # =========================================
-# GENERATE SIGNAL
+# STRATEGY
 # =========================================
 
 def generate_signal(df):
@@ -110,24 +131,33 @@ def generate_signal(df):
             window=14
         ).rsi()
 
+        macd = MACD(
+            close=df["close"]
+        ).macd()
+
         last_ema9 = ema9.iloc[-1]
         last_ema21 = ema21.iloc[-1]
+
         last_rsi = rsi.iloc[-1]
 
-        # CALL SIGNAL
+        last_macd = macd.iloc[-1]
+
+        # STRONG CALL
 
         if (
             last_ema9 > last_ema21
             and last_rsi > 55
+            and last_macd > 0
         ):
 
             return "CALL"
 
-        # PUT SIGNAL
+        # STRONG PUT
 
         elif (
             last_ema9 < last_ema21
             and last_rsi < 45
+            and last_macd < 0
         ):
 
             return "PUT"
@@ -141,57 +171,32 @@ def generate_signal(df):
         return None
 
 # =========================================
-# CHECK RESULT
+# RESULT CHECK
 # =========================================
 
 def check_result(before_price, after_price, signal):
 
-    try:
+    if signal == "CALL":
 
-        if signal == "CALL":
-
-            if after_price > before_price:
-                return "WIN"
-
-            return "LOSS"
-
-        elif signal == "PUT":
-
-            if after_price < before_price:
-                return "WIN"
-
-            return "LOSS"
+        if after_price > before_price:
+            return "WIN"
 
         return "LOSS"
 
-    except Exception as e:
+    elif signal == "PUT":
 
-        print("RESULT ERROR:", e)
+        if after_price < before_price:
+            return "WIN"
 
         return "LOSS"
 
-# =========================================
-# SEND TELEGRAM MESSAGE
-# =========================================
-
-async def send_telegram_message(message):
-
-    try:
-
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=message
-        )
-
-    except Exception as e:
-
-        print("TELEGRAM ERROR:", e)
+    return "LOSS"
 
 # =========================================
 # SEND SIGNAL
 # =========================================
 
-def send_signal(pair, signal):
+def process_signal(pair, timeframe, interval_seconds):
 
     global total_signal
     global total_win
@@ -199,20 +204,40 @@ def send_signal(pair, signal):
 
     try:
 
-        total_signal += 1
+        df = get_data(pair, timeframe)
 
-        now = datetime.now()
+        if df is None:
+            return
 
-        entry_time = now.strftime("%H:%M")
+        signal = generate_signal(df)
 
-        exit_time = datetime.fromtimestamp(
-            now.timestamp() + 60
-        ).strftime("%H:%M")
+        if signal is None:
+
+            print("NO SIGNAL:", pair)
+
+            return
 
         pair_name = pair.replace("/", "") + "-OTC"
 
+        now = datetime.now()
+
+        # SIGNAL TIME
+        signal_time = now.strftime("%H:%M")
+
+        # ENTRY TIME
+        entry_dt = now + timedelta(minutes=1)
+
+        entry_time = entry_dt.strftime("%H:%M")
+
+        # EXIT TIME
+        exit_dt = entry_dt + timedelta(seconds=interval_seconds)
+
+        exit_time = exit_dt.strftime("%H:%M")
+
+        total_signal += 1
+
         # =====================================
-        # SIGNAL MESSAGE
+        # SEND SIGNAL BEFORE ENTRY
         # =====================================
 
         signal_message = f"""
@@ -220,49 +245,41 @@ def send_signal(pair, signal):
 
 💷 {pair_name}
 
+Signal Time ⏰ {signal_time}
+
 Entry ⏳ {entry_time}
 Exit ⏳ {exit_time}
 
-⌚️ M1
+⌚️ {timeframe.upper()}
 
 {"🟢 CALL" if signal == "CALL" else "🔴 PUT"}
 """
 
-        asyncio.run(
-            send_telegram_message(signal_message)
-        )
+        asyncio.run(send_message(signal_message))
 
         print("SIGNAL SENT:", pair_name)
 
-        # =====================================
-        # BEFORE PRICE
-        # =====================================
+        # WAIT UNTIL ENTRY
 
-        before_df = get_data(pair)
+        time.sleep(60)
+
+        before_df = get_data(pair, timeframe)
 
         if before_df is None:
             return
 
         before_price = before_df["close"].iloc[-1]
 
-        # WAIT 1 MINUTE
+        # WAIT FOR TRADE DURATION
 
-        time.sleep(60)
+        time.sleep(interval_seconds)
 
-        # =====================================
-        # AFTER PRICE
-        # =====================================
-
-        after_df = get_data(pair)
+        after_df = get_data(pair, timeframe)
 
         if after_df is None:
             return
 
         after_price = after_df["close"].iloc[-1]
-
-        # =====================================
-        # RESULT
-        # =====================================
 
         result = check_result(
             before_price,
@@ -300,15 +317,13 @@ Total Win: {total_win}
 Total Loss: {total_loss}
 """
 
-        asyncio.run(
-            send_telegram_message(result_message)
-        )
+        asyncio.run(send_message(result_message))
 
-        print("RESULT SENT")
+        print("RESULT SENT:", pair_name)
 
     except Exception as e:
 
-        print("SEND SIGNAL ERROR:", e)
+        print("PROCESS ERROR:", e)
 
 # =========================================
 # MAIN LOOP
@@ -318,26 +333,37 @@ while True:
 
     try:
 
+        print("CHECKING MARKET...")
+
+        # M1 SIGNALS
+
         for pair in pairs:
 
-            print("CHECKING:", pair)
+            process_signal(
+                pair=pair,
+                timeframe="1min",
+                interval_seconds=60
+            )
 
-            df = get_data(pair)
+        # M2 SIGNALS
 
-            if df is None:
-                continue
+        for pair in pairs:
 
-            signal = generate_signal(df)
+            process_signal(
+                pair=pair,
+                timeframe="2min",
+                interval_seconds=120
+            )
 
-            if signal:
+        # M5 SIGNALS
 
-                send_signal(pair, signal)
+        for pair in pairs:
 
-                time.sleep(10)
-
-            else:
-
-                print("NO SIGNAL")
+            process_signal(
+                pair=pair,
+                timeframe="5min",
+                interval_seconds=300
+            )
 
         time.sleep(30)
 
@@ -345,4 +371,4 @@ while True:
 
         print("MAIN LOOP ERROR:", e)
 
-        time.sleep(15)
+        time.sleep(20)
