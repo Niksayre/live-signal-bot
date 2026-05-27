@@ -3,14 +3,23 @@ import time
 import requests
 import pandas as pd
 
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator
-from datetime import datetime, timedelta
+from ta.volatility import BollingerBands
 
-print("HIGH ACCURACY FOREX BOT STARTED")
+print("FXCM STYLE FOREX BOT STARTED")
 
 # =========================================
-# ENV VARIABLES
+# INDIA TIMEZONE
+# =========================================
+
+IST = ZoneInfo("Asia/Kolkata")
+
+# =========================================
+# ENV
 # =========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -38,7 +47,7 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# TELEGRAM
+# SEND TELEGRAM
 # =========================================
 
 def send_message(text):
@@ -59,7 +68,7 @@ def send_message(text):
         print("TELEGRAM ERROR:", e)
 
 # =========================================
-# GET DATA
+# GET LIVE FOREX DATA
 # =========================================
 
 def get_data(symbol, timeframe):
@@ -70,7 +79,7 @@ def get_data(symbol, timeframe):
             f"https://api.twelvedata.com/time_series"
             f"?symbol={symbol}"
             f"&interval={timeframe}"
-            f"&outputsize=250"
+            f"&outputsize=300"
             f"&apikey={API_KEY}"
         )
 
@@ -79,13 +88,12 @@ def get_data(symbol, timeframe):
         data = response.json()
 
         if "values" not in data:
+
             return None
 
         df = pd.DataFrame(data["values"])
 
         df = df.iloc[::-1]
-
-        # CONVERT
 
         for col in ["open", "high", "low", "close"]:
 
@@ -100,16 +108,12 @@ def get_data(symbol, timeframe):
         return None
 
 # =========================================
-# HIGH ACCURACY STRATEGY
+# ULTRA FILTER STRATEGY
 # =========================================
 
 def generate_signal(df, higher_df):
 
     try:
-
-        # ==========================
-        # MAIN TIMEFRAME
-        # ==========================
 
         ema9 = EMAIndicator(
             close=df["close"],
@@ -137,81 +141,84 @@ def generate_signal(df, higher_df):
             window=14
         ).adx()
 
-        # ==========================
-        # HIGHER TIMEFRAME TREND
-        # ==========================
+        bb = BollingerBands(
+            close=df["close"],
+            window=20
+        )
 
         higher_ema = EMAIndicator(
             close=higher_df["close"],
             window=50
         ).ema_indicator()
 
-        # ==========================
         # LAST VALUES
-        # ==========================
 
-        last_close = df["close"].iloc[-1]
+        close_price = df["close"].iloc[-1]
 
-        last_ema9 = ema9.iloc[-1]
-        last_ema21 = ema21.iloc[-1]
+        ema9_last = ema9.iloc[-1]
+        ema21_last = ema21.iloc[-1]
 
-        last_rsi = rsi.iloc[-1]
+        rsi_last = rsi.iloc[-1]
 
-        last_macd = macd.iloc[-1]
+        macd_last = macd.iloc[-1]
 
-        last_adx = adx.iloc[-1]
+        adx_last = adx.iloc[-1]
+
+        bb_high = bb.bollinger_hband().iloc[-1]
+        bb_low = bb.bollinger_lband().iloc[-1]
 
         higher_trend = higher_ema.iloc[-1]
 
-        # ==========================
-        # CANDLE CONFIRMATION
-        # ==========================
+        # CANDLE
 
-        last_open = df["open"].iloc[-1]
+        open_last = df["open"].iloc[-1]
 
-        bullish_candle = last_close > last_open
+        bullish = close_price > open_last
+        bearish = close_price < open_last
 
-        bearish_candle = last_close < last_open
-
-        # ===================================
+        # =====================================
         # STRONG BUY
-        # ===================================
+        # =====================================
 
         if (
 
-            last_ema9 > last_ema21
+            ema9_last > ema21_last
 
-            and last_rsi > 58
+            and rsi_last > 60
 
-            and last_macd > 0
+            and macd_last > 0
 
-            and last_adx > 25
+            and adx_last > 25
 
-            and last_close > higher_trend
+            and close_price > higher_trend
 
-            and bullish_candle
+            and bullish
+
+            and close_price < bb_high
 
         ):
 
             return "BUY"
 
-        # ===================================
+        # =====================================
         # STRONG SELL
-        # ===================================
+        # =====================================
 
         elif (
 
-            last_ema9 < last_ema21
+            ema9_last < ema21_last
 
-            and last_rsi < 42
+            and rsi_last < 40
 
-            and last_macd < 0
+            and macd_last < 0
 
-            and last_adx > 25
+            and adx_last > 25
 
-            and last_close < higher_trend
+            and close_price < higher_trend
 
-            and bearish_candle
+            and bearish
+
+            and close_price > bb_low
 
         ):
 
@@ -235,19 +242,19 @@ def check_result(entry, exitp, signal):
 
         return "WIN" if exitp > entry else "LOSS"
 
-    if signal == "SELL":
+    elif signal == "SELL":
 
         return "WIN" if exitp < entry else "LOSS"
 
     return "LOSS"
 
 # =========================================
-# NEXT EXACT CANDLE
+# NEXT CANDLE TIME
 # =========================================
 
 def next_candle():
 
-    now = datetime.now()
+    now = datetime.now(IST)
 
     return (
         now.replace(second=0, microsecond=0)
@@ -287,7 +294,7 @@ def process_trade(pair, timeframe, duration):
 
         exit_dt = entry_dt + timedelta(seconds=duration)
 
-        signal_time = datetime.now().strftime("%H:%M:%S")
+        signal_time = datetime.now(IST).strftime("%H:%M:%S")
 
         entry_time = entry_dt.strftime("%H:%M:00")
 
@@ -295,9 +302,9 @@ def process_trade(pair, timeframe, duration):
 
         total_signal += 1
 
-        # ===================================
-        # SIGNAL
-        # ===================================
+        # =====================================
+        # SEND SIGNAL
+        # =====================================
 
         signal_message = f"""
 🚧 LIVE FOREX SIGNAL
@@ -319,9 +326,11 @@ Exit ⏳ {exit_time}
 
         print("SIGNAL SENT:", pair_name)
 
-        # WAIT FOR ENTRY
+        # =====================================
+        # WAIT UNTIL ENTRY
+        # =====================================
 
-        while datetime.now() < entry_dt:
+        while datetime.now(IST) < entry_dt:
 
             time.sleep(1)
 
@@ -334,7 +343,7 @@ Exit ⏳ {exit_time}
 
         entry_price = entry_df["close"].iloc[-1]
 
-        # WAIT TRADE TIME
+        # WAIT DURATION
 
         time.sleep(duration)
 
@@ -363,9 +372,9 @@ Exit ⏳ {exit_time}
 
             total_loss += 1
 
-        # ===================================
-        # RESULT MESSAGE
-        # ===================================
+        # =====================================
+        # SEND RESULT
+        # =====================================
 
         result_message = f"""
 ✅ RESULT
@@ -379,14 +388,16 @@ Exit ⏳ {exit_time}
 
         send_message(result_message)
 
-        # ===================================
-        # SUMMARY
-        # ===================================
+        print("RESULT SENT")
+
+        # =====================================
+        # SEND SUMMARY
+        # =====================================
 
         summary_message = f"""
 📊 SUMMARY
 
-Date: {datetime.now().strftime("%d/%m/%Y")}
+Date: {datetime.now(IST).strftime("%d/%m/%Y")}
 
 Total Signal: {total_signal}
 
@@ -397,11 +408,11 @@ Total Loss: {total_loss}
 
         send_message(summary_message)
 
-        print("RESULT + SUMMARY SENT")
+        print("SUMMARY SENT")
 
-        # WAIT
+        # COOLDOWN
 
-        time.sleep(10)
+        time.sleep(15)
 
     except Exception as e:
 
@@ -415,9 +426,9 @@ while True:
 
     try:
 
-        print("CHECKING LIVE FOREX MARKET")
+        print("CHECKING FXCM STYLE LIVE FOREX")
 
-        # 1 MIN
+        # ONLY BEST M1 SIGNALS
 
         for pair in pairs:
 
@@ -425,26 +436,6 @@ while True:
                 pair=pair,
                 timeframe="1min",
                 duration=60
-            )
-
-        # 2 MIN
-
-        for pair in pairs:
-
-            process_trade(
-                pair=pair,
-                timeframe="2min",
-                duration=120
-            )
-
-        # 5 MIN
-
-        for pair in pairs:
-
-            process_trade(
-                pair=pair,
-                timeframe="5min",
-                duration=300
             )
 
         time.sleep(20)
