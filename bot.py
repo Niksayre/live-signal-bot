@@ -9,10 +9,6 @@ from ta.trend import EMAIndicator, MACD
 from ta.momentum import RSIIndicator
 from datetime import datetime, timedelta
 
-# =========================================
-# START
-# =========================================
-
 print("LIVE SIGNAL BOT STARTED")
 
 # =========================================
@@ -23,8 +19,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
-print("BOT TOKEN LOADED")
-print("CHANNEL ID:", CHANNEL_ID)
+print("TOKEN LOADED")
 
 # =========================================
 # TELEGRAM
@@ -52,7 +47,7 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# TELEGRAM SEND
+# SEND TELEGRAM MESSAGE
 # =========================================
 
 async def send_message(text):
@@ -69,18 +64,18 @@ async def send_message(text):
         print("TELEGRAM ERROR:", e)
 
 # =========================================
-# GET MARKET DATA
+# GET DATA
 # =========================================
 
-def get_data(symbol, interval):
+def get_data(symbol, timeframe):
 
     try:
 
         url = (
             f"https://api.twelvedata.com/time_series"
             f"?symbol={symbol}"
-            f"&interval={interval}"
-            f"&outputsize=150"
+            f"&interval={timeframe}"
+            f"&outputsize=100"
             f"&apikey={API_KEY}"
         )
 
@@ -109,7 +104,7 @@ def get_data(symbol, interval):
         return None
 
 # =========================================
-# STRATEGY
+# SIGNAL STRATEGY
 # =========================================
 
 def generate_signal(df):
@@ -137,9 +132,7 @@ def generate_signal(df):
 
         last_ema9 = ema9.iloc[-1]
         last_ema21 = ema21.iloc[-1]
-
         last_rsi = rsi.iloc[-1]
-
         last_macd = macd.iloc[-1]
 
         # STRONG CALL
@@ -171,7 +164,7 @@ def generate_signal(df):
         return None
 
 # =========================================
-# RESULT CHECK
+# CHECK RESULT
 # =========================================
 
 def check_result(before_price, after_price, signal):
@@ -193,10 +186,10 @@ def check_result(before_price, after_price, signal):
     return "LOSS"
 
 # =========================================
-# SEND SIGNAL
+# PROCESS TRADE
 # =========================================
 
-def process_signal(pair, timeframe, interval_seconds):
+def process_trade(pair, timeframe, duration):
 
     global total_signal
     global total_win
@@ -217,27 +210,24 @@ def process_signal(pair, timeframe, interval_seconds):
 
             return
 
+        total_signal += 1
+
         pair_name = pair.replace("/", "") + "-OTC"
 
         now = datetime.now()
 
-        # SIGNAL TIME
         signal_time = now.strftime("%H:%M")
 
-        # ENTRY TIME
-        entry_dt = now + timedelta(minutes=1)
+        entry_time = (
+            now + timedelta(minutes=1)
+        ).strftime("%H:%M")
 
-        entry_time = entry_dt.strftime("%H:%M")
-
-        # EXIT TIME
-        exit_dt = entry_dt + timedelta(seconds=interval_seconds)
-
-        exit_time = exit_dt.strftime("%H:%M")
-
-        total_signal += 1
+        exit_time = (
+            now + timedelta(minutes=1, seconds=duration)
+        ).strftime("%H:%M")
 
         # =====================================
-        # SEND SIGNAL BEFORE ENTRY
+        # SEND SIGNAL
         # =====================================
 
         signal_message = f"""
@@ -255,11 +245,15 @@ Exit ⏳ {exit_time}
 {"🟢 CALL" if signal == "CALL" else "🔴 PUT"}
 """
 
-        asyncio.run(send_message(signal_message))
+        asyncio.run(
+            send_message(signal_message)
+        )
 
         print("SIGNAL SENT:", pair_name)
 
-        # WAIT UNTIL ENTRY
+        # =====================================
+        # WAIT FOR ENTRY
+        # =====================================
 
         time.sleep(60)
 
@@ -270,9 +264,11 @@ Exit ⏳ {exit_time}
 
         before_price = before_df["close"].iloc[-1]
 
-        # WAIT FOR TRADE DURATION
+        # =====================================
+        # WAIT FOR TRADE CLOSE
+        # =====================================
 
-        time.sleep(interval_seconds)
+        time.sleep(duration)
 
         after_df = get_data(pair, timeframe)
 
@@ -280,6 +276,10 @@ Exit ⏳ {exit_time}
             return
 
         after_price = after_df["close"].iloc[-1]
+
+        # =====================================
+        # RESULT
+        # =====================================
 
         result = check_result(
             before_price,
@@ -296,7 +296,7 @@ Exit ⏳ {exit_time}
             total_loss += 1
 
         # =====================================
-        # RESULT MESSAGE
+        # SEND RESULT
         # =====================================
 
         result_message = f"""
@@ -307,19 +307,41 @@ Exit ⏳ {exit_time}
 {signal}
 
 {result}
+"""
 
+        asyncio.run(
+            send_message(result_message)
+        )
+
+        print("RESULT SENT:", pair_name)
+
+        # =====================================
+        # SEND SUMMARY
+        # =====================================
+
+        summary_message = f"""
 📊 SUMMARY
 
 Date: {datetime.now().strftime("%d/%m/%Y")}
 
 Total Signal: {total_signal}
+
 Total Win: {total_win}
+
 Total Loss: {total_loss}
 """
 
-        asyncio.run(send_message(result_message))
+        asyncio.run(
+            send_message(summary_message)
+        )
 
-        print("RESULT SENT:", pair_name)
+        print("SUMMARY SENT")
+
+        # =====================================
+        # WAIT BEFORE NEXT SIGNAL
+        # =====================================
+
+        time.sleep(15)
 
     except Exception as e:
 
@@ -333,36 +355,36 @@ while True:
 
     try:
 
-        print("CHECKING MARKET...")
+        print("CHECKING MARKET")
 
-        # M1 SIGNALS
+        # M1
 
         for pair in pairs:
 
-            process_signal(
+            process_trade(
                 pair=pair,
                 timeframe="1min",
-                interval_seconds=60
+                duration=60
             )
 
-        # M2 SIGNALS
+        # M2
 
         for pair in pairs:
 
-            process_signal(
+            process_trade(
                 pair=pair,
                 timeframe="2min",
-                interval_seconds=120
+                duration=120
             )
 
-        # M5 SIGNALS
+        # M5
 
         for pair in pairs:
 
-            process_signal(
+            process_trade(
                 pair=pair,
                 timeframe="5min",
-                interval_seconds=300
+                duration=300
             )
 
         time.sleep(30)
