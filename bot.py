@@ -1,3 +1,4 @@
+import os
 import requests
 import pandas as pd
 import time
@@ -8,20 +9,23 @@ from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from datetime import datetime
 
-# =====================================
-# TELEGRAM
-# =====================================
+# =========================================
+# ENVIRONMENT VARIABLES
+# =========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+API_KEY = os.getenv("API_KEY")
+
+# =========================================
+# TELEGRAM BOT
+# =========================================
 
 bot = Bot(token=BOT_TOKEN)
 
-# =====================================
-# API
-# =====================================
-
-API_KEY = os.getenv("API_KEY")
+# =========================================
+# PAIRS
+# =========================================
 
 pairs = [
     "GBP/JPY",
@@ -30,101 +34,138 @@ pairs = [
     "EUR/JPY"
 ]
 
-# =====================================
-# SUMMARY
-# =====================================
+# =========================================
+# SUMMARY VARIABLES
+# =========================================
 
 total_signal = 0
 total_win = 0
 total_loss = 0
 
-# =====================================
-# GET DATA
-# =====================================
+# =========================================
+# GET MARKET DATA
+# =========================================
 
 def get_data(symbol):
 
-    url = (
-        f"https://api.twelvedata.com/time_series"
-        f"?symbol={symbol}"
-        f"&interval=1min"
-        f"&outputsize=100"
-        f"&apikey={API_KEY}"
-    )
+    try:
 
-    response = requests.get(url).json()
+        url = (
+            f"https://api.twelvedata.com/time_series"
+            f"?symbol={symbol}"
+            f"&interval=1min"
+            f"&outputsize=100"
+            f"&apikey={API_KEY}"
+        )
 
-    values = response.get("values")
+        response = requests.get(url)
 
-    if not values:
+        data = response.json()
+
+        if "values" not in data:
+            print(f"NO DATA FOR {symbol}")
+            return None
+
+        df = pd.DataFrame(data["values"])
+
+        df = df.iloc[::-1]
+
+        df["close"] = df["close"].astype(float)
+
+        return df
+
+    except Exception as e:
+
+        print("DATA ERROR:", e)
+
         return None
 
-    df = pd.DataFrame(values)
-
-    df = df.iloc[::-1]
-
-    df["close"] = df["close"].astype(float)
-
-    return df
-
-# =====================================
-# SIGNAL LOGIC
-# =====================================
+# =========================================
+# SIGNAL STRATEGY
+# =========================================
 
 def generate_signal(df):
 
-    ema9 = EMAIndicator(
-        close=df["close"],
-        window=9
-    ).ema_indicator()
+    try:
 
-    ema21 = EMAIndicator(
-        close=df["close"],
-        window=21
-    ).ema_indicator()
+        ema9 = EMAIndicator(
+            close=df["close"],
+            window=9
+        ).ema_indicator()
 
-    rsi = RSIIndicator(
-        close=df["close"],
-        window=14
-    ).rsi()
+        ema21 = EMAIndicator(
+            close=df["close"],
+            window=21
+        ).ema_indicator()
 
-    if (
-        ema9.iloc[-1] > ema21.iloc[-1]
-        and rsi.iloc[-1] > 55
-    ):
-        return "CALL"
+        rsi = RSIIndicator(
+            close=df["close"],
+            window=14
+        ).rsi()
 
-    elif (
-        ema9.iloc[-1] < ema21.iloc[-1]
-        and rsi.iloc[-1] < 45
-    ):
-        return "PUT"
+        last_ema9 = ema9.iloc[-1]
+        last_ema21 = ema21.iloc[-1]
+        last_rsi = rsi.iloc[-1]
 
-    return None
+        # CALL SIGNAL
 
-# =====================================
-# CHECK RESULT
-# =====================================
+        if (
+            last_ema9 > last_ema21
+            and last_rsi > 55
+        ):
 
-def check_result(before, after, signal):
+            return "CALL"
 
-    if signal == "CALL":
+        # PUT SIGNAL
 
-        if after > before:
-            return "WIN"
+        elif (
+            last_ema9 < last_ema21
+            and last_rsi < 45
+        ):
+
+            return "PUT"
+
+        return None
+
+    except Exception as e:
+
+        print("SIGNAL ERROR:", e)
+
+        return None
+
+# =========================================
+# CHECK WIN OR LOSS
+# =========================================
+
+def check_result(before_price, after_price, signal):
+
+    try:
+
+        if signal == "CALL":
+
+            if after_price > before_price:
+                return "WIN"
+
+            else:
+                return "LOSS"
+
+        elif signal == "PUT":
+
+            if after_price < before_price:
+                return "WIN"
+
+            else:
+                return "LOSS"
+
+    except Exception as e:
+
+        print("RESULT ERROR:", e)
 
         return "LOSS"
 
-    elif signal == "PUT":
-
-        if after < before:
-            return "WIN"
-
-        return "LOSS"
-
-# =====================================
+# =========================================
 # SEND SIGNAL
-# =====================================
+# =========================================
 
 def send_signal(pair, signal):
 
@@ -132,23 +173,27 @@ def send_signal(pair, signal):
     global total_win
     global total_loss
 
-    total_signal += 1
+    try:
 
-    now = datetime.now()
+        total_signal += 1
 
-    entry_time = now.strftime("%H:%M")
+        current_time = datetime.now()
 
-    exit_time = (
-        now.timestamp() + 60
-    )
+        entry_time = current_time.strftime("%H:%M")
 
-    exit_time = datetime.fromtimestamp(
-        exit_time
-    ).strftime("%H:%M")
+        exit_timestamp = current_time.timestamp() + 60
 
-    pair_name = pair.replace("/", "") + "-OTC"
+        exit_time = datetime.fromtimestamp(
+            exit_timestamp
+        ).strftime("%H:%M")
 
-    signal_message = f"""
+        pair_name = pair.replace("/", "") + "-OTC"
+
+        # =====================================
+        # SEND ENTRY SIGNAL
+        # =====================================
+
+        signal_message = f"""
 🚧 LIVE SIGNAL
 
 💷 {pair_name}
@@ -161,39 +206,64 @@ Exit ⏳ {exit_time}
 {"🟢 CALL" if signal == "CALL" else "🔴 PUT"}
 """
 
-    bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=signal_message
-    )
+        bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=signal_message
+        )
 
-    before_df = get_data(pair)
+        print(f"SIGNAL SENT: {pair_name} {signal}")
 
-    if before_df is None:
-        return
+        # =====================================
+        # GET BEFORE PRICE
+        # =====================================
 
-    before_price = before_df["close"].iloc[-1]
+        before_df = get_data(pair)
 
-    time.sleep(60)
+        if before_df is None:
+            return
 
-    after_df = get_data(pair)
+        before_price = before_df["close"].iloc[-1]
 
-    if after_df is None:
-        return
+        # =====================================
+        # WAIT 1 MINUTE
+        # =====================================
 
-    after_price = after_df["close"].iloc[-1]
+        time.sleep(60)
 
-    result = check_result(
-        before_price,
-        after_price,
-        signal
-    )
+        # =====================================
+        # GET AFTER PRICE
+        # =====================================
 
-    if result == "WIN":
-        total_win += 1
-    else:
-        total_loss += 1
+        after_df = get_data(pair)
 
-    result_message = f"""
+        if after_df is None:
+            return
+
+        after_price = after_df["close"].iloc[-1]
+
+        # =====================================
+        # CHECK RESULT
+        # =====================================
+
+        result = check_result(
+            before_price,
+            after_price,
+            signal
+        )
+
+        if result == "WIN":
+
+            total_win += 1
+
+        else:
+
+            total_loss += 1
+
+        # =====================================
+        # RESULT MESSAGE
+        # =====================================
+
+        result_message = f"""
 ✅ RESULT
 
 💷 {pair_name}
@@ -211,16 +281,24 @@ Total Win: {total_win}
 Total Loss: {total_loss}
 """
 
-    bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=result_message
-    )
+        bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=result_message
+        )
 
-# =====================================
+        print(f"RESULT SENT: {result}")
+
+    except Exception as e:
+
+        print("SEND SIGNAL ERROR:", e)
+
+# =========================================
 # MAIN BOT LOOP
-# =====================================
+# =========================================
 
 def run_bot():
+
+    print("BOT STARTED SUCCESSFULLY")
 
     while True:
 
@@ -228,9 +306,14 @@ def run_bot():
 
             for pair in pairs:
 
+                print(f"CHECKING: {pair}")
+
                 df = get_data(pair)
 
                 if df is None:
+
+                    print("NO DATA")
+
                     continue
 
                 signal = generate_signal(df)
@@ -241,21 +324,34 @@ def run_bot():
 
                     time.sleep(10)
 
+                else:
+
+                    print(f"NO SIGNAL FOR {pair}")
+
+            # WAIT BEFORE NEXT CHECK
+
             time.sleep(30)
 
         except Exception as e:
 
-            print("ERROR:", e)
+            print("MAIN LOOP ERROR:", e)
 
             time.sleep(15)
 
-# =====================================
-# START
-# =====================================
+# =========================================
+# START THREAD
+# =========================================
 
-threading.Thread(
+thread = threading.Thread(
     target=run_bot
-).start()
+)
+
+thread.start()
+
+# =========================================
+# KEEP PROGRAM RUNNING
+# =========================================
 
 while True:
+
     time.sleep(100)
