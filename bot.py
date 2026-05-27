@@ -4,6 +4,7 @@ import pandas as pd
 import time
 
 from telegram import Bot
+import asyncio
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from datetime import datetime
