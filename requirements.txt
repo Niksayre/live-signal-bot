@@ -1,0 +1,6 @@
+python-telegram-bot
+requests
+pandas
+ta
+flask
+gunicorn
