@@ -1,10 +1,10 @@
 import os
+import time
+import asyncio
 import requests
 import pandas as pd
-import time
 
 from telegram import Bot
-import asyncio
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from datetime import datetime
@@ -20,7 +20,7 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
 print("BOT TOKEN LOADED")
-print("CHANNEL:", CHANNEL_ID)
+print("CHANNEL ID:", CHANNEL_ID)
 
 # =========================================
 # TELEGRAM BOT
@@ -40,7 +40,7 @@ pairs = [
 ]
 
 # =========================================
-# SUMMARY
+# SUMMARY VARIABLES
 # =========================================
 
 total_signal = 0
@@ -88,7 +88,7 @@ def get_data(symbol):
         return None
 
 # =========================================
-# SIGNAL STRATEGY
+# GENERATE SIGNAL
 # =========================================
 
 def generate_signal(df):
@@ -114,7 +114,7 @@ def generate_signal(df):
         last_ema21 = ema21.iloc[-1]
         last_rsi = rsi.iloc[-1]
 
-        # BUY SIGNAL
+        # CALL SIGNAL
 
         if (
             last_ema9 > last_ema21
@@ -123,7 +123,7 @@ def generate_signal(df):
 
             return "CALL"
 
-        # SELL SIGNAL
+        # PUT SIGNAL
 
         elif (
             last_ema9 < last_ema21
@@ -141,26 +141,51 @@ def generate_signal(df):
         return None
 
 # =========================================
-# RESULT CHECK
+# CHECK RESULT
 # =========================================
 
 def check_result(before_price, after_price, signal):
 
-    if signal == "CALL":
+    try:
 
-        if after_price > before_price:
-            return "WIN"
+        if signal == "CALL":
+
+            if after_price > before_price:
+                return "WIN"
+
+            return "LOSS"
+
+        elif signal == "PUT":
+
+            if after_price < before_price:
+                return "WIN"
+
+            return "LOSS"
 
         return "LOSS"
 
-    elif signal == "PUT":
+    except Exception as e:
 
-        if after_price < before_price:
-            return "WIN"
+        print("RESULT ERROR:", e)
 
         return "LOSS"
 
-    return "LOSS"
+# =========================================
+# SEND TELEGRAM MESSAGE
+# =========================================
+
+async def send_telegram_message(message):
+
+    try:
+
+        await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=message
+        )
+
+    except Exception as e:
+
+        print("TELEGRAM ERROR:", e)
 
 # =========================================
 # SEND SIGNAL
@@ -203,9 +228,8 @@ Exit ⏳ {exit_time}
 {"🟢 CALL" if signal == "CALL" else "🔴 PUT"}
 """
 
-        bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=signal_message
+        asyncio.run(
+            send_telegram_message(signal_message)
         )
 
         print("SIGNAL SENT:", pair_name)
@@ -276,9 +300,8 @@ Total Win: {total_win}
 Total Loss: {total_loss}
 """
 
-        bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=result_message
+        asyncio.run(
+            send_telegram_message(result_message)
         )
 
         print("RESULT SENT")
