@@ -12,8 +12,8 @@ from datetime import datetime
 # TELEGRAM
 # =====================================
 
-BOT_TOKEN = "8926681279:AAEa-0EQpSoCMTbldp0GE03LNAs5wBNwKqY"
-CHANNEL_ID = "8241640506"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 bot = Bot(token=BOT_TOKEN)
 
@@ -21,7 +21,7 @@ bot = Bot(token=BOT_TOKEN)
 # API
 # =====================================
 
-API_KEY = "749fdcaa0edf4c5cbe6a3914489071c8"
+API_KEY = os.getenv("API_KEY")
 
 pairs = [
     "GBP/JPY",
