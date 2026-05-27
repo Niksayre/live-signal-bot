@@ -1,6 +1,5 @@
 import os
 import time
-import asyncio
 import requests
 import pandas as pd
 
@@ -22,7 +21,7 @@ API_KEY = os.getenv("API_KEY")
 print("TOKEN LOADED")
 
 # =========================================
-# TELEGRAM
+# TELEGRAM BOT
 # =========================================
 
 bot = Bot(token=BOT_TOKEN)
@@ -47,16 +46,20 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# SEND TELEGRAM MESSAGE
+# SEND TELEGRAM
 # =========================================
 
-async def send_message(text):
+def send_message(text):
 
     try:
 
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=text
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data={
+                "chat_id": CHANNEL_ID,
+                "text": text
+            },
+            timeout=20
         )
 
     except Exception as e:
@@ -64,7 +67,7 @@ async def send_message(text):
         print("TELEGRAM ERROR:", e)
 
 # =========================================
-# GET DATA
+# GET MARKET DATA
 # =========================================
 
 def get_data(symbol, timeframe):
@@ -104,7 +107,7 @@ def get_data(symbol, timeframe):
         return None
 
 # =========================================
-# SIGNAL STRATEGY
+# STRATEGY
 # =========================================
 
 def generate_signal(df):
@@ -135,7 +138,7 @@ def generate_signal(df):
         last_rsi = rsi.iloc[-1]
         last_macd = macd.iloc[-1]
 
-        # STRONG CALL
+        # CALL
 
         if (
             last_ema9 > last_ema21
@@ -145,7 +148,7 @@ def generate_signal(df):
 
             return "CALL"
 
-        # STRONG PUT
+        # PUT
 
         elif (
             last_ema9 < last_ema21
@@ -164,7 +167,7 @@ def generate_signal(df):
         return None
 
 # =========================================
-# CHECK RESULT
+# RESULT CHECK
 # =========================================
 
 def check_result(before_price, after_price, signal):
@@ -210,21 +213,25 @@ def process_trade(pair, timeframe, duration):
 
             return
 
-        total_signal += 1
-
         pair_name = pair.replace("/", "") + "-OTC"
 
         now = datetime.now()
 
-        signal_time = now.strftime("%H:%M")
+        # =====================================
+        # SIGNAL 1 MIN BEFORE ENTRY
+        # =====================================
 
-        entry_time = (
-            now + timedelta(minutes=1)
-        ).strftime("%H:%M")
+        signal_time = now.strftime("%H:%M:%S")
 
-        exit_time = (
-            now + timedelta(minutes=1, seconds=duration)
-        ).strftime("%H:%M")
+        entry_dt = now + timedelta(minutes=1)
+
+        entry_time = entry_dt.strftime("%H:%M:%S")
+
+        exit_dt = entry_dt + timedelta(seconds=duration)
+
+        exit_time = exit_dt.strftime("%H:%M:%S")
+
+        total_signal += 1
 
         # =====================================
         # SEND SIGNAL
@@ -238,6 +245,7 @@ def process_trade(pair, timeframe, duration):
 Signal Time ⏰ {signal_time}
 
 Entry ⏳ {entry_time}
+
 Exit ⏳ {exit_time}
 
 ⌚️ {timeframe.upper()}
@@ -245,17 +253,19 @@ Exit ⏳ {exit_time}
 {"🟢 CALL" if signal == "CALL" else "🔴 PUT"}
 """
 
-        asyncio.run(
-            send_message(signal_message)
-        )
+        send_message(signal_message)
 
         print("SIGNAL SENT:", pair_name)
 
         # =====================================
-        # WAIT FOR ENTRY
+        # WAIT EXACTLY 1 MINUTE
         # =====================================
 
         time.sleep(60)
+
+        # =====================================
+        # ENTRY PRICE
+        # =====================================
 
         before_df = get_data(pair, timeframe)
 
@@ -264,11 +274,17 @@ Exit ⏳ {exit_time}
 
         before_price = before_df["close"].iloc[-1]
 
+        print("ENTRY PRICE:", before_price)
+
         # =====================================
-        # WAIT FOR TRADE CLOSE
+        # WAIT TRADE DURATION
         # =====================================
 
         time.sleep(duration)
+
+        # =====================================
+        # EXIT PRICE
+        # =====================================
 
         after_df = get_data(pair, timeframe)
 
@@ -276,6 +292,8 @@ Exit ⏳ {exit_time}
             return
 
         after_price = after_df["close"].iloc[-1]
+
+        print("EXIT PRICE:", after_price)
 
         # =====================================
         # RESULT
@@ -309,11 +327,9 @@ Exit ⏳ {exit_time}
 {result}
 """
 
-        asyncio.run(
-            send_message(result_message)
-        )
+        send_message(result_message)
 
-        print("RESULT SENT:", pair_name)
+        print("RESULT SENT")
 
         # =====================================
         # SEND SUMMARY
@@ -331,17 +347,15 @@ Total Win: {total_win}
 Total Loss: {total_loss}
 """
 
-        asyncio.run(
-            send_message(summary_message)
-        )
+        send_message(summary_message)
 
         print("SUMMARY SENT")
 
         # =====================================
-        # WAIT BEFORE NEXT SIGNAL
+        # WAIT BEFORE NEXT TRADE
         # =====================================
 
-        time.sleep(15)
+        time.sleep(10)
 
     except Exception as e:
 
