@@ -3,11 +3,11 @@ import time
 import requests
 import pandas as pd
 
-from ta.trend import EMAIndicator, MACD
+from ta.trend import EMAIndicator, MACD, ADXIndicator
 from ta.momentum import RSIIndicator
 from datetime import datetime, timedelta
 
-print("REAL FOREX SIGNAL BOT STARTED")
+print("HIGH ACCURACY FOREX BOT STARTED")
 
 # =========================================
 # ENV VARIABLES
@@ -17,17 +17,16 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
-print("TOKEN LOADED")
-
 # =========================================
-# REAL FOREX PAIRS
+# PAIRS
 # =========================================
 
 pairs = [
     "EUR/USD",
     "GBP/JPY",
     "USD/JPY",
-    "EUR/JPY"
+    "EUR/JPY",
+    "GBP/USD"
 ]
 
 # =========================================
@@ -39,7 +38,7 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# SEND TELEGRAM
+# TELEGRAM
 # =========================================
 
 def send_message(text):
@@ -60,7 +59,7 @@ def send_message(text):
         print("TELEGRAM ERROR:", e)
 
 # =========================================
-# GET MARKET DATA
+# GET DATA
 # =========================================
 
 def get_data(symbol, timeframe):
@@ -71,7 +70,7 @@ def get_data(symbol, timeframe):
             f"https://api.twelvedata.com/time_series"
             f"?symbol={symbol}"
             f"&interval={timeframe}"
-            f"&outputsize=200"
+            f"&outputsize=250"
             f"&apikey={API_KEY}"
         )
 
@@ -80,16 +79,17 @@ def get_data(symbol, timeframe):
         data = response.json()
 
         if "values" not in data:
-
-            print("NO DATA:", symbol)
-
             return None
 
         df = pd.DataFrame(data["values"])
 
         df = df.iloc[::-1]
 
-        df["close"] = df["close"].astype(float)
+        # CONVERT
+
+        for col in ["open", "high", "low", "close"]:
+
+            df[col] = df[col].astype(float)
 
         return df
 
@@ -103,9 +103,13 @@ def get_data(symbol, timeframe):
 # HIGH ACCURACY STRATEGY
 # =========================================
 
-def generate_signal(df):
+def generate_signal(df, higher_df):
 
     try:
+
+        # ==========================
+        # MAIN TIMEFRAME
+        # ==========================
 
         ema9 = EMAIndicator(
             close=df["close"],
@@ -126,6 +130,28 @@ def generate_signal(df):
             close=df["close"]
         ).macd()
 
+        adx = ADXIndicator(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            window=14
+        ).adx()
+
+        # ==========================
+        # HIGHER TIMEFRAME TREND
+        # ==========================
+
+        higher_ema = EMAIndicator(
+            close=higher_df["close"],
+            window=50
+        ).ema_indicator()
+
+        # ==========================
+        # LAST VALUES
+        # ==========================
+
+        last_close = df["close"].iloc[-1]
+
         last_ema9 = ema9.iloc[-1]
         last_ema21 = ema21.iloc[-1]
 
@@ -133,22 +159,60 @@ def generate_signal(df):
 
         last_macd = macd.iloc[-1]
 
+        last_adx = adx.iloc[-1]
+
+        higher_trend = higher_ema.iloc[-1]
+
+        # ==========================
+        # CANDLE CONFIRMATION
+        # ==========================
+
+        last_open = df["open"].iloc[-1]
+
+        bullish_candle = last_close > last_open
+
+        bearish_candle = last_close < last_open
+
+        # ===================================
         # STRONG BUY
+        # ===================================
 
         if (
+
             last_ema9 > last_ema21
-            and last_rsi > 55
+
+            and last_rsi > 58
+
             and last_macd > 0
+
+            and last_adx > 25
+
+            and last_close > higher_trend
+
+            and bullish_candle
+
         ):
 
             return "BUY"
 
+        # ===================================
         # STRONG SELL
+        # ===================================
 
         elif (
+
             last_ema9 < last_ema21
-            and last_rsi < 45
+
+            and last_rsi < 42
+
             and last_macd < 0
+
+            and last_adx > 25
+
+            and last_close < higher_trend
+
+            and bearish_candle
+
         ):
 
             return "SELL"
@@ -162,44 +226,36 @@ def generate_signal(df):
         return None
 
 # =========================================
-# CHECK RESULT
+# RESULT
 # =========================================
 
-def check_result(before_price, after_price, signal):
+def check_result(entry, exitp, signal):
 
     if signal == "BUY":
 
-        if after_price > before_price:
-            return "WIN"
+        return "WIN" if exitp > entry else "LOSS"
 
-        return "LOSS"
+    if signal == "SELL":
 
-    elif signal == "SELL":
-
-        if after_price < before_price:
-            return "WIN"
-
-        return "LOSS"
+        return "WIN" if exitp < entry else "LOSS"
 
     return "LOSS"
 
 # =========================================
-# EXACT CANDLE TIME
+# NEXT EXACT CANDLE
 # =========================================
 
-def next_minute_time():
+def next_candle():
 
     now = datetime.now()
 
-    next_min = (
+    return (
         now.replace(second=0, microsecond=0)
         + timedelta(minutes=1)
     )
 
-    return next_min
-
 # =========================================
-# PROCESS SIGNAL
+# PROCESS TRADE
 # =========================================
 
 def process_trade(pair, timeframe, duration):
@@ -212,26 +268,22 @@ def process_trade(pair, timeframe, duration):
 
         df = get_data(pair, timeframe)
 
-        if df is None:
+        higher_df = get_data(pair, "5min")
+
+        if df is None or higher_df is None:
             return
 
-        signal = generate_signal(df)
+        signal = generate_signal(df, higher_df)
 
         if signal is None:
 
-            print("NO SIGNAL:", pair)
+            print("NO STRONG SIGNAL:", pair)
 
             return
 
-        total_signal += 1
-
         pair_name = pair.replace("/", "")
 
-        # =====================================
-        # EXACT ENTRY TIME
-        # =====================================
-
-        entry_dt = next_minute_time()
+        entry_dt = next_candle()
 
         exit_dt = entry_dt + timedelta(seconds=duration)
 
@@ -241,12 +293,14 @@ def process_trade(pair, timeframe, duration):
 
         exit_time = exit_dt.strftime("%H:%M:00")
 
-        # =====================================
-        # SEND SIGNAL
-        # =====================================
+        total_signal += 1
+
+        # ===================================
+        # SIGNAL
+        # ===================================
 
         signal_message = f"""
-🚧 LIVE SIGNAL
+🚧 LIVE FOREX SIGNAL
 
 💷 {pair_name}
 
@@ -265,53 +319,39 @@ Exit ⏳ {exit_time}
 
         print("SIGNAL SENT:", pair_name)
 
-        # =====================================
-        # WAIT UNTIL ENTRY TIME
-        # =====================================
+        # WAIT FOR ENTRY
 
         while datetime.now() < entry_dt:
 
             time.sleep(1)
 
-        # =====================================
         # ENTRY PRICE
-        # =====================================
 
-        before_df = get_data(pair, timeframe)
+        entry_df = get_data(pair, timeframe)
 
-        if before_df is None:
+        if entry_df is None:
             return
 
-        before_price = before_df["close"].iloc[-1]
+        entry_price = entry_df["close"].iloc[-1]
 
-        print("ENTRY:", before_price)
-
-        # =====================================
         # WAIT TRADE TIME
-        # =====================================
 
         time.sleep(duration)
 
-        # =====================================
         # EXIT PRICE
-        # =====================================
 
-        after_df = get_data(pair, timeframe)
+        exit_df = get_data(pair, timeframe)
 
-        if after_df is None:
+        if exit_df is None:
             return
 
-        after_price = after_df["close"].iloc[-1]
+        exit_price = exit_df["close"].iloc[-1]
 
-        print("EXIT:", after_price)
-
-        # =====================================
         # RESULT
-        # =====================================
 
         result = check_result(
-            before_price,
-            after_price,
+            entry_price,
+            exit_price,
             signal
         )
 
@@ -323,9 +363,9 @@ Exit ⏳ {exit_time}
 
             total_loss += 1
 
-        # =====================================
+        # ===================================
         # RESULT MESSAGE
-        # =====================================
+        # ===================================
 
         result_message = f"""
 ✅ RESULT
@@ -339,11 +379,9 @@ Exit ⏳ {exit_time}
 
         send_message(result_message)
 
-        print("RESULT SENT")
-
-        # =====================================
+        # ===================================
         # SUMMARY
-        # =====================================
+        # ===================================
 
         summary_message = f"""
 📊 SUMMARY
@@ -359,11 +397,9 @@ Total Loss: {total_loss}
 
         send_message(summary_message)
 
-        print("SUMMARY SENT")
+        print("RESULT + SUMMARY SENT")
 
-        # =====================================
-        # WAIT BEFORE NEXT SIGNAL
-        # =====================================
+        # WAIT
 
         time.sleep(10)
 
@@ -379,7 +415,7 @@ while True:
 
     try:
 
-        print("CHECKING REAL FOREX MARKET")
+        print("CHECKING LIVE FOREX MARKET")
 
         # 1 MIN
 
@@ -411,7 +447,7 @@ while True:
                 duration=300
             )
 
-        time.sleep(30)
+        time.sleep(20)
 
     except Exception as e:
 
