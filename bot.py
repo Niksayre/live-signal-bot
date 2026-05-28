@@ -1,19 +1,19 @@
 import os
 import time
+import random
 import requests
 import pandas as pd
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from ta.trend import EMAIndicator, MACD, ADXIndicator
+from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
 
-print("LIVE FOREX MARTINGALE BOT STARTED")
+print("REAL FOREX SIGNAL BOT STARTED")
 
 # =========================================
-# INDIA TIMEZONE
+# INDIA TIME
 # =========================================
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -27,25 +27,14 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
 # =========================================
-# CHECK VARIABLES
-# =========================================
-
-if not BOT_TOKEN:
-    print("BOT_TOKEN NOT FOUND")
-
-if not CHANNEL_ID:
-    print("CHANNEL_ID NOT FOUND")
-
-if not API_KEY:
-    print("API_KEY NOT FOUND")
-
-# =========================================
-# FOREX PAIRS
+# PAIRS
 # =========================================
 
 pairs = [
     "EUR/USD",
-    "GBP/USD"
+    "GBP/USD",
+    "USD/JPY",
+    "EUR/JPY"
 ]
 
 # =========================================
@@ -57,7 +46,7 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# SEND TELEGRAM MESSAGE
+# SEND TELEGRAM
 # =========================================
 
 def send_message(text):
@@ -66,36 +55,34 @@ def send_message(text):
 
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-        data = {
-            "chat_id": CHANNEL_ID,
-            "text": text
-        }
-
-        response = requests.post(
+        requests.post(
             url,
-            data=data,
+            data={
+                "chat_id": CHANNEL_ID,
+                "text": text
+            },
             timeout=20
         )
 
-        print("TELEGRAM STATUS:", response.status_code)
+        print("MESSAGE SENT")
 
     except Exception as e:
 
         print("TELEGRAM ERROR:", e)
 
 # =========================================
-# GET LIVE FOREX DATA
+# GET FOREX DATA
 # =========================================
 
-def get_data(symbol, timeframe):
+def get_data(symbol, interval):
 
     try:
 
         url = (
             f"https://api.twelvedata.com/time_series"
             f"?symbol={symbol}"
-            f"&interval={timeframe}"
-            f"&outputsize=200"
+            f"&interval={interval}"
+            f"&outputsize=100"
             f"&apikey={API_KEY}"
         )
 
@@ -105,7 +92,7 @@ def get_data(symbol, timeframe):
 
         if "values" not in data:
 
-            print("NO DATA:", symbol)
+            print("NO API DATA")
 
             return None
 
@@ -113,7 +100,7 @@ def get_data(symbol, timeframe):
 
         df = df.iloc[::-1]
 
-        for col in ["open", "high", "low", "close"]:
+        for col in ["open", "close", "high", "low"]:
 
             df[col] = df[col].astype(float)
 
@@ -126,21 +113,21 @@ def get_data(symbol, timeframe):
         return None
 
 # =========================================
-# GENERATE SIGNAL
+# STRATEGY
 # =========================================
 
-def generate_signal(df, higher_df):
+def generate_signal(df):
 
     try:
 
-        ema9 = EMAIndicator(
+        ema5 = EMAIndicator(
             close=df["close"],
-            window=9
+            window=5
         ).ema_indicator()
 
-        ema21 = EMAIndicator(
+        ema10 = EMAIndicator(
             close=df["close"],
-            window=21
+            window=10
         ).ema_indicator()
 
         rsi = RSIIndicator(
@@ -148,72 +135,27 @@ def generate_signal(df, higher_df):
             window=14
         ).rsi()
 
-        macd = MACD(
-            close=df["close"]
-        ).macd()
+        last_close = df["close"].iloc[-1]
 
-        adx = ADXIndicator(
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            window=14
-        ).adx()
-
-        bb = BollingerBands(
-            close=df["close"],
-            window=20
-        )
-
-        higher_ema = EMAIndicator(
-            close=higher_df["close"],
-            window=50
-        ).ema_indicator()
-
-        close_price = df["close"].iloc[-1]
-        open_price = df["open"].iloc[-1]
-
-        bullish = close_price > open_price
-        bearish = close_price < open_price
-
-        # BUY SIGNAL
+        # BUY
 
         if (
 
-            ema9.iloc[-1] > ema21.iloc[-1]
+            ema5.iloc[-1] > ema10.iloc[-1]
 
-            and rsi.iloc[-1] > 52
-
-            and macd.iloc[-1] > 0
-
-            and adx.iloc[-1] > 18
-
-            and close_price > higher_ema.iloc[-1]
-
-            and bullish
-
-            and close_price < bb.bollinger_hband().iloc[-1]
+            and rsi.iloc[-1] > 50
 
         ):
 
             return "BUY"
 
-        # SELL SIGNAL
+        # SELL
 
         elif (
 
-            ema9.iloc[-1] < ema21.iloc[-1]
+            ema5.iloc[-1] < ema10.iloc[-1]
 
-            and rsi.iloc[-1] < 48
-
-            and macd.iloc[-1] < 0
-
-            and adx.iloc[-1] > 18
-
-            and close_price < higher_ema.iloc[-1]
-
-            and bearish
-
-            and close_price > bb.bollinger_lband().iloc[-1]
+            and rsi.iloc[-1] < 50
 
         ):
 
@@ -274,31 +216,32 @@ def process_trade(pair):
 
     try:
 
-        timeframe = "1min"
+        # RANDOM TIMEFRAME
+        timeframe_choice = random.choice([
+            ("1min", 1),
+            ("2min", 2),
+            ("5min", 5)
+        ])
 
-        duration = 60
+        timeframe = timeframe_choice[0]
 
-        print("CHECKING:", pair)
+        duration_min = timeframe_choice[1]
 
-        # GET DATA
+        duration_sec = duration_min * 60
+
+        print("CHECKING:", pair, timeframe)
 
         df = get_data(pair, timeframe)
 
-        higher_df = get_data(pair, "5min")
-
-        if df is None or higher_df is None:
-
-            print("DATA FAILED")
+        if df is None:
 
             return
 
-        # GENERATE SIGNAL
-
-        signal = generate_signal(df, higher_df)
+        signal = generate_signal(df)
 
         if signal is None:
 
-            print("NO STRONG SIGNAL:", pair)
+            print("NO SIGNAL")
 
             return
 
@@ -308,7 +251,9 @@ def process_trade(pair):
 
         entry_dt = next_candle()
 
-        exit_dt = entry_dt + timedelta(seconds=60)
+        exit_dt = entry_dt + timedelta(
+            minutes=duration_min
+        )
 
         signal_time = datetime.now(IST).strftime("%H:%M:%S")
 
@@ -333,7 +278,7 @@ Entry ⏳ {entry_time}
 
 Exit ⏳ {exit_time}
 
-⌚️ M1
+⌚️ M{duration_min}
 
 {"🟢 BUY" if signal == "BUY" else "🔴 SELL"}
 
@@ -342,11 +287,9 @@ Exit ⏳ {exit_time}
 
         send_message(signal_message)
 
-        print("SIGNAL SENT:", pair_name)
+        print("SIGNAL SENT")
 
-        # =====================================
-        # WAIT ENTRY
-        # =====================================
+        # WAIT FOR ENTRY
 
         while datetime.now(IST) < entry_dt:
 
@@ -362,11 +305,11 @@ Exit ⏳ {exit_time}
 
         entry_price = entry_df["close"].iloc[-1]
 
-        print("ENTRY PRICE:", entry_price)
+        print("ENTRY:", entry_price)
 
-        # WAIT CLOSE
+        # WAIT CANDLE CLOSE
 
-        time.sleep(duration)
+        time.sleep(duration_sec)
 
         # EXIT PRICE
 
@@ -378,9 +321,9 @@ Exit ⏳ {exit_time}
 
         exit_price = exit_df["close"].iloc[-1]
 
-        print("EXIT PRICE:", exit_price)
+        print("EXIT:", exit_price)
 
-        # CHECK RESULT
+        # RESULT
 
         result = check_result(
             entry_price,
@@ -407,8 +350,6 @@ WIN
 """
 
             send_message(result_message)
-
-            print("WIN SENT")
 
         # =====================================
         # LOSS -> MG1
@@ -438,7 +379,7 @@ Applying MG1...
 
             # WAIT NEXT CANDLE
 
-            time.sleep(60)
+            time.sleep(duration_sec)
 
             # MG1 EXIT
 
@@ -456,13 +397,11 @@ Applying MG1...
                 signal
             )
 
-            # MG1 RESULT
-
             if mg_result == "WIN":
 
                 total_win += 1
 
-                mg_message = f"""
+                send_message(f"""
 ✅ MG1 RESULT
 
 💷 {pair_name}
@@ -470,17 +409,13 @@ Applying MG1...
 {signal}
 
 WIN
-"""
-
-                send_message(mg_message)
-
-                print("MG1 WIN")
+""")
 
             else:
 
                 total_loss += 1
 
-                mg_message = f"""
+                send_message(f"""
 ❌ MG1 RESULT
 
 💷 {pair_name}
@@ -488,11 +423,7 @@ WIN
 {signal}
 
 LOSS
-"""
-
-                send_message(mg_message)
-
-                print("MG1 LOSS")
+""")
 
         # =====================================
         # SUMMARY
@@ -516,7 +447,7 @@ Total Loss: {total_loss}
 
         # WAIT BEFORE NEXT SIGNAL
 
-        time.sleep(30)
+        time.sleep(20)
 
     except Exception as e:
 
@@ -536,11 +467,11 @@ while True:
 
             process_trade(pair)
 
-            # API LIMIT PROTECTION
-            time.sleep(60)
+            # API SAFETY
+            time.sleep(30)
 
         # MAIN WAIT
-        time.sleep(120)
+        time.sleep(60)
 
     except Exception as e:
 
