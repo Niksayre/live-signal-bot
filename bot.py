@@ -1,4 +1,3 @@
-```python
 import os
 import time
 import requests
@@ -28,7 +27,20 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
 # =========================================
-# PAIRS
+# CHECK VARIABLES
+# =========================================
+
+if not BOT_TOKEN:
+    print("BOT_TOKEN NOT FOUND")
+
+if not CHANNEL_ID:
+    print("CHANNEL_ID NOT FOUND")
+
+if not API_KEY:
+    print("API_KEY NOT FOUND")
+
+# =========================================
+# FOREX PAIRS
 # =========================================
 
 pairs = [
@@ -59,7 +71,13 @@ def send_message(text):
             "text": text
         }
 
-        requests.post(url, data=data, timeout=20)
+        response = requests.post(
+            url,
+            data=data,
+            timeout=20
+        )
+
+        print("TELEGRAM STATUS:", response.status_code)
 
     except Exception as e:
 
@@ -77,7 +95,7 @@ def get_data(symbol, timeframe):
             f"https://api.twelvedata.com/time_series"
             f"?symbol={symbol}"
             f"&interval={timeframe}"
-            f"&outputsize=300"
+            f"&outputsize=200"
             f"&apikey={API_KEY}"
         )
 
@@ -108,7 +126,7 @@ def get_data(symbol, timeframe):
         return None
 
 # =========================================
-# STRATEGY
+# GENERATE SIGNAL
 # =========================================
 
 def generate_signal(df, higher_df):
@@ -152,7 +170,6 @@ def generate_signal(df, higher_df):
         ).ema_indicator()
 
         close_price = df["close"].iloc[-1]
-
         open_price = df["open"].iloc[-1]
 
         bullish = close_price > open_price
@@ -164,11 +181,11 @@ def generate_signal(df, higher_df):
 
             ema9.iloc[-1] > ema21.iloc[-1]
 
-            and rsi.iloc[-1] > 60
+            and rsi.iloc[-1] > 52
 
             and macd.iloc[-1] > 0
 
-            and adx.iloc[-1] > 25
+            and adx.iloc[-1] > 18
 
             and close_price > higher_ema.iloc[-1]
 
@@ -186,11 +203,11 @@ def generate_signal(df, higher_df):
 
             ema9.iloc[-1] < ema21.iloc[-1]
 
-            and rsi.iloc[-1] < 40
+            and rsi.iloc[-1] < 48
 
             and macd.iloc[-1] < 0
 
-            and adx.iloc[-1] > 25
+            and adx.iloc[-1] > 18
 
             and close_price < higher_ema.iloc[-1]
 
@@ -218,16 +235,22 @@ def check_result(entry, exitp, signal):
 
     if signal == "BUY":
 
-        return "WIN" if exitp > entry else "LOSS"
+        if exitp > entry:
+            return "WIN"
+        else:
+            return "LOSS"
 
-    elif signal == "SELL":
+    if signal == "SELL":
 
-        return "WIN" if exitp < entry else "LOSS"
+        if exitp < entry:
+            return "WIN"
+        else:
+            return "LOSS"
 
     return "LOSS"
 
 # =========================================
-# NEXT CANDLE TIME
+# NEXT CANDLE
 # =========================================
 
 def next_candle():
@@ -255,6 +278,8 @@ def process_trade(pair):
 
         duration = 60
 
+        print("CHECKING:", pair)
+
         # GET DATA
 
         df = get_data(pair, timeframe)
@@ -262,6 +287,8 @@ def process_trade(pair):
         higher_df = get_data(pair, "5min")
 
         if df is None or higher_df is None:
+
+            print("DATA FAILED")
 
             return
 
@@ -318,7 +345,7 @@ Exit ⏳ {exit_time}
         print("SIGNAL SENT:", pair_name)
 
         # =====================================
-        # WAIT FOR ENTRY
+        # WAIT ENTRY
         # =====================================
 
         while datetime.now(IST) < entry_dt:
@@ -335,9 +362,9 @@ Exit ⏳ {exit_time}
 
         entry_price = entry_df["close"].iloc[-1]
 
-        print("ENTRY:", entry_price)
+        print("ENTRY PRICE:", entry_price)
 
-        # WAIT CANDLE CLOSE
+        # WAIT CLOSE
 
         time.sleep(duration)
 
@@ -351,9 +378,9 @@ Exit ⏳ {exit_time}
 
         exit_price = exit_df["close"].iloc[-1]
 
-        print("EXIT:", exit_price)
+        print("EXIT PRICE:", exit_price)
 
-        # RESULT
+        # CHECK RESULT
 
         result = check_result(
             entry_price,
@@ -487,7 +514,7 @@ Total Loss: {total_loss}
 
         print("SUMMARY SENT")
 
-        # WAIT
+        # WAIT BEFORE NEXT SIGNAL
 
         time.sleep(30)
 
@@ -503,13 +530,13 @@ while True:
 
     try:
 
-        print("CHECKING LIVE FOREX MARKET")
+        print("CHECKING LIVE FOREX")
 
         for pair in pairs:
 
             process_trade(pair)
 
-            # API PROTECTION
+            # API LIMIT PROTECTION
             time.sleep(60)
 
         # MAIN WAIT
@@ -520,4 +547,3 @@ while True:
         print("MAIN LOOP ERROR:", e)
 
         time.sleep(60)
-```
