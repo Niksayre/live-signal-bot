@@ -1,6 +1,5 @@
 import os
-import time
-import random
+import asyncio
 import requests
 import pandas as pd
 
@@ -10,25 +9,25 @@ from zoneinfo import ZoneInfo
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 
-print("REAL FOREX SIGNAL BOT STARTED")
+print("LIVE FOREX BOT STARTED")
 
-# =========================================
+# =====================================
 # INDIA TIME
-# =========================================
+# =====================================
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# =========================================
-# ENV VARIABLES
-# =========================================
+# =====================================
+# TOKENS
+# =====================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
-# =========================================
-# PAIRS
-# =========================================
+# =====================================
+# FOREX PAIRS
+# =====================================
 
 pairs = [
     "EUR/USD",
@@ -37,19 +36,19 @@ pairs = [
     "EUR/JPY"
 ]
 
-# =========================================
+# =====================================
 # SUMMARY
-# =========================================
+# =====================================
 
 total_signal = 0
 total_win = 0
 total_loss = 0
 
-# =========================================
+# =====================================
 # SEND TELEGRAM
-# =========================================
+# =====================================
 
-def send_message(text):
+async def send_message(text):
 
     try:
 
@@ -70,9 +69,9 @@ def send_message(text):
 
         print("TELEGRAM ERROR:", e)
 
-# =========================================
+# =====================================
 # GET FOREX DATA
-# =========================================
+# =====================================
 
 def get_data(symbol, interval):
 
@@ -112,9 +111,9 @@ def get_data(symbol, interval):
 
         return None
 
-# =========================================
-# STRATEGY
-# =========================================
+# =====================================
+# SIGNAL STRATEGY
+# =====================================
 
 def generate_signal(df):
 
@@ -135,10 +134,6 @@ def generate_signal(df):
             window=14
         ).rsi()
 
-        last_close = df["close"].iloc[-1]
-
-        # BUY
-
         if (
 
             ema5.iloc[-1] > ema10.iloc[-1]
@@ -148,8 +143,6 @@ def generate_signal(df):
         ):
 
             return "BUY"
-
-        # SELL
 
         elif (
 
@@ -169,9 +162,9 @@ def generate_signal(df):
 
         return None
 
-# =========================================
-# CHECK RESULT
-# =========================================
+# =====================================
+# RESULT CHECK
+# =====================================
 
 def check_result(entry, exitp, signal):
 
@@ -191,9 +184,9 @@ def check_result(entry, exitp, signal):
 
     return "LOSS"
 
-# =========================================
-# NEXT CANDLE
-# =========================================
+# =====================================
+# NEXT MINUTE CANDLE
+# =====================================
 
 def next_candle():
 
@@ -204,11 +197,11 @@ def next_candle():
         + timedelta(minutes=1)
     )
 
-# =========================================
-# PROCESS TRADE
-# =========================================
+# =====================================
+# PROCESS SIGNAL
+# =====================================
 
-def process_trade(pair):
+async def process_trade(pair):
 
     global total_signal
     global total_win
@@ -216,20 +209,9 @@ def process_trade(pair):
 
     try:
 
-        # RANDOM TIMEFRAME
-        timeframe_choice = random.choice([
-            ("1min", 1),
-            ("2min", 2),
-            ("5min", 5)
-        ])
+        print("CHECKING:", pair)
 
-        timeframe = timeframe_choice[0]
-
-        duration_min = timeframe_choice[1]
-
-        duration_sec = duration_min * 60
-
-        print("CHECKING:", pair, timeframe)
+        timeframe = "1min"
 
         df = get_data(pair, timeframe)
 
@@ -247,13 +229,13 @@ def process_trade(pair):
 
         pair_name = pair.replace("/", "")
 
+        # =====================================
         # TIMES
+        # =====================================
 
         entry_dt = next_candle()
 
-        exit_dt = entry_dt + timedelta(
-            minutes=duration_min
-        )
+        exit_dt = entry_dt + timedelta(minutes=1)
 
         signal_time = datetime.now(IST).strftime("%H:%M:%S")
 
@@ -278,24 +260,28 @@ Entry ⏳ {entry_time}
 
 Exit ⏳ {exit_time}
 
-⌚️ M{duration_min}
+⌚️ M1
 
 {"🟢 BUY" if signal == "BUY" else "🔴 SELL"}
 
 ⚠️ MG1 ENABLED
 """
 
-        send_message(signal_message)
+        await send_message(signal_message)
 
         print("SIGNAL SENT")
 
+        # =====================================
         # WAIT FOR ENTRY
+        # =====================================
 
         while datetime.now(IST) < entry_dt:
 
-            time.sleep(1)
+            await asyncio.sleep(1)
 
+        # =====================================
         # ENTRY PRICE
+        # =====================================
 
         entry_df = get_data(pair, timeframe)
 
@@ -307,11 +293,15 @@ Exit ⏳ {exit_time}
 
         print("ENTRY:", entry_price)
 
-        # WAIT CANDLE CLOSE
+        # =====================================
+        # WAIT CLOSE
+        # =====================================
 
-        time.sleep(duration_sec)
+        await asyncio.sleep(60)
 
+        # =====================================
         # EXIT PRICE
+        # =====================================
 
         exit_df = get_data(pair, timeframe)
 
@@ -322,8 +312,6 @@ Exit ⏳ {exit_time}
         exit_price = exit_df["close"].iloc[-1]
 
         print("EXIT:", exit_price)
-
-        # RESULT
 
         result = check_result(
             entry_price,
@@ -339,7 +327,7 @@ Exit ⏳ {exit_time}
 
             total_win += 1
 
-            result_message = f"""
+            await send_message(f"""
 ✅ RESULT
 
 💷 {pair_name}
@@ -347,17 +335,17 @@ Exit ⏳ {exit_time}
 {signal}
 
 WIN
-"""
+""")
 
-            send_message(result_message)
+            print("WIN SENT")
 
         # =====================================
-        # LOSS -> MG1
+        # LOSS → MG1
         # =====================================
 
         else:
 
-            send_message(f"""
+            await send_message(f"""
 ❌ LOSS
 
 💷 {pair_name}
@@ -367,8 +355,6 @@ Applying MG1...
 
             print("STARTING MG1")
 
-            # MG1 ENTRY
-
             mg_entry_df = get_data(pair, timeframe)
 
             if mg_entry_df is None:
@@ -377,11 +363,7 @@ Applying MG1...
 
             mg_entry = mg_entry_df["close"].iloc[-1]
 
-            # WAIT NEXT CANDLE
-
-            time.sleep(duration_sec)
-
-            # MG1 EXIT
+            await asyncio.sleep(60)
 
             mg_exit_df = get_data(pair, timeframe)
 
@@ -401,7 +383,7 @@ Applying MG1...
 
                 total_win += 1
 
-                send_message(f"""
+                await send_message(f"""
 ✅ MG1 RESULT
 
 💷 {pair_name}
@@ -415,7 +397,7 @@ WIN
 
                 total_loss += 1
 
-                send_message(f"""
+                await send_message(f"""
 ❌ MG1 RESULT
 
 💷 {pair_name}
@@ -429,7 +411,7 @@ LOSS
         # SUMMARY
         # =====================================
 
-        summary_message = f"""
+        await send_message(f"""
 📊 SUMMARY
 
 Date: {datetime.now(IST).strftime("%d/%m/%Y")}
@@ -439,42 +421,42 @@ Total Signal: {total_signal}
 Total Win: {total_win}
 
 Total Loss: {total_loss}
-"""
-
-        send_message(summary_message)
+""")
 
         print("SUMMARY SENT")
-
-        # WAIT BEFORE NEXT SIGNAL
-
-        time.sleep(20)
 
     except Exception as e:
 
         print("PROCESS ERROR:", e)
 
-# =========================================
+# =====================================
 # MAIN LOOP
-# =========================================
+# =====================================
 
-while True:
+async def main():
 
-    try:
+    while True:
 
-        print("CHECKING LIVE FOREX")
+        try:
 
-        for pair in pairs:
+            print("CHECKING LIVE FOREX")
 
-            process_trade(pair)
+            for pair in pairs:
 
-            # API SAFETY
-            time.sleep(30)
+                await process_trade(pair)
 
-        # MAIN WAIT
-        time.sleep(60)
+                await asyncio.sleep(15)
 
-    except Exception as e:
+            await asyncio.sleep(30)
 
-        print("MAIN LOOP ERROR:", e)
+        except Exception as e:
 
-        time.sleep(60)
+            print("MAIN LOOP ERROR:", e)
+
+            await asyncio.sleep(60)
+
+# =====================================
+# START BOT
+# =====================================
+
+asyncio.run(main())
