@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import os
 import asyncio
 import requests
@@ -139,16 +140,64 @@ def generate_signal(df):
             ema5.iloc[-1] > ema10.iloc[-1]
 
             and rsi.iloc[-1] > 50
+=======
+def generate_signal(df):
+
+    try:
+
+        close = df["close"]
+
+        ema3 = EMAIndicator(
+            close=close,
+            window=3
+        ).ema_indicator()
+
+        ema5 = EMAIndicator(
+            close=close,
+            window=5
+        ).ema_indicator()
+
+        rsi = RSIIndicator(
+            close=close,
+            window=7
+        ).rsi()
+
+        current = close.iloc[-1]
+
+        previous = close.iloc[-2]
+
+        # BUY SIGNAL
+
+        if (
+
+            ema3.iloc[-1] > ema5.iloc[-1]
+
+            and rsi.iloc[-1] > 48
+
+            and current > previous
+>>>>>>> 2a0538935e0525c03f5c0c0684d91a08f35d26d5
 
         ):
 
             return "BUY"
 
+<<<<<<< HEAD
         elif (
 
             ema5.iloc[-1] < ema10.iloc[-1]
 
             and rsi.iloc[-1] < 50
+=======
+        # SELL SIGNAL
+
+        elif (
+
+            ema3.iloc[-1] < ema5.iloc[-1]
+
+            and rsi.iloc[-1] < 52
+
+            and current < previous
+>>>>>>> 2a0538935e0525c03f5c0c0684d91a08f35d26d5
 
         ):
 
@@ -161,6 +210,7 @@ def generate_signal(df):
         print("SIGNAL ERROR:", e)
 
         return None
+<<<<<<< HEAD
 
 # =====================================
 # RESULT CHECK
@@ -460,3 +510,5 @@ async def main():
 # =====================================
 
 asyncio.run(main())
+=======
+>>>>>>> 2a0538935e0525c03f5c0c0684d91a08f35d26d5
