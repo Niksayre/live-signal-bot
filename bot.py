@@ -29,23 +29,31 @@ total_win = 0
 total_loss = 0
 
 # =========================
-# GET LIVE FOREX DATA
+# GET FOREX DATA
 # =========================
 
-def get_forex_data(symbol):
+def get_forex_data(symbol, interval="1min"):
+
     try:
-        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1min&outputsize=50&apikey={API_KEY}"
+
+        url = (
+            f"https://api.twelvedata.com/time_series?"
+            f"symbol={symbol}"
+            f"&interval={interval}"
+            f"&outputsize=10"
+            f"&apikey={API_KEY}"
+        )
 
         response = requests.get(url).json()
 
         if "values" not in response:
+            print("API ERROR:", response)
             return None
 
-        candles = response["values"]
+        return response["values"]
 
-        return candles
-
-    except:
+    except Exception as e:
+        print("DATA ERROR:", e)
         return None
 
 # =========================
@@ -54,41 +62,83 @@ def get_forex_data(symbol):
 
 def generate_signal(candles):
 
-    closes = [float(x["close"]) for x in candles[:10]]
+    try:
 
-    last = closes[0]
-    prev = closes[1]
-    prev2 = closes[2]
+        c1 = candles[0]
+        c2 = candles[1]
+        c3 = candles[2]
 
-    # TREND
-    bullish = last > prev > prev2
-    bearish = last < prev < prev2
+        open1 = float(c1["open"])
+        close1 = float(c1["close"])
 
-    # MOMENTUM FILTER
-    strength = abs(last - prev)
+        open2 = float(c2["open"])
+        close2 = float(c2["close"])
 
-    if strength < 0.0002:
+        open3 = float(c3["open"])
+        close3 = float(c3["close"])
+
+        bullish = 0
+        bearish = 0
+
+        # candle 1
+        if close1 > open1:
+            bullish += 1
+        else:
+            bearish += 1
+
+        # candle 2
+        if close2 > open2:
+            bullish += 1
+        else:
+            bearish += 1
+
+        # candle 3
+        if close3 > open3:
+            bullish += 1
+        else:
+            bearish += 1
+
+        # STRONG TREND FILTER
+        diff = abs(close1 - open1)
+
+        if diff < 0.00015:
+            return None
+
+        # BUY
+        if bullish >= 2:
+            return "BUY"
+
+        # SELL
+        if bearish >= 2:
+            return "SELL"
+
         return None
 
-    if bullish:
-        return "BUY"
+    except Exception as e:
 
-    if bearish:
-        return "SELL"
+        print("SIGNAL ERROR:", e)
 
-    return None
+        return None
 
 # =========================
-# CHECK RESULT
+# RESULT CHECK
 # =========================
 
-def check_result(entry_open, close_price, signal):
+def check_result(open_price, close_price, signal):
 
     if signal == "BUY":
-        return "WIN" if close_price > entry_open else "LOSS"
+
+        if close_price > open_price:
+            return "WIN"
+        else:
+            return "LOSS"
 
     if signal == "SELL":
-        return "WIN" if close_price < entry_open else "LOSS"
+
+        if close_price < open_price:
+            return "WIN"
+        else:
+            return "LOSS"
 
     return "LOSS"
 
@@ -97,13 +147,94 @@ def check_result(entry_open, close_price, signal):
 # =========================
 
 async def send_message(text):
+
     try:
+
         await bot.send_message(
             chat_id=CHANNEL_ID,
             text=text
         )
+
     except Exception as e:
+
         print("TELEGRAM ERROR:", e)
+
+# =========================
+# MARTINGALE
+# =========================
+
+async def martingale_trade(symbol, signal):
+
+    global total_win
+    global total_loss
+
+    try:
+
+        mg_entry = (
+            datetime.now(IST) + timedelta(minutes=1)
+        ).replace(second=0, microsecond=0)
+
+        mg_exit = mg_entry + timedelta(minutes=1)
+
+        mg_text = f"""
+⚠️ MARTINGALE 1
+
+💷 {symbol}-FX
+
+Entry ⏳ {mg_entry.strftime('%H:%M:%S')}
+
+Exit ⏳ {mg_exit.strftime('%H:%M:%S')}
+
+⌚️ M1
+
+{"🟢 BUY" if signal == "BUY" else "🔴 SELL"}
+"""
+
+        await send_message(mg_text)
+
+        wait_time = (
+            mg_exit - datetime.now(IST)
+        ).total_seconds()
+
+        if wait_time > 0:
+            await asyncio.sleep(wait_time + 2)
+
+        candles = get_forex_data(symbol)
+
+        if not candles:
+            return
+
+        latest = candles[0]
+
+        open_price = float(latest["open"])
+        close_price = float(latest["close"])
+
+        result = check_result(
+            open_price,
+            close_price,
+            signal
+        )
+
+        if result == "WIN":
+            total_win += 1
+        else:
+            total_loss += 1
+
+        result_text = f"""
+✅ MG1 RESULT
+
+💷 {symbol}-FX
+
+{signal}
+
+{result}
+"""
+
+        await send_message(result_text)
+
+    except Exception as e:
+
+        print("MG ERROR:", e)
 
 # =========================
 # MAIN LOOP
@@ -123,14 +254,16 @@ async def main():
 
             now = datetime.now(IST)
 
-            # WAIT UNTIL 58th SECOND
-            if now.second < 58:
+            # CHECK ONLY LAST 5 SECONDS
+            if now.second < 55:
                 await asyncio.sleep(1)
                 continue
 
             print("CHECKING LIVE FOREX")
 
             for pair_name, symbol in pairs:
+
+                print("CHECKING:", pair_name)
 
                 candles = get_forex_data(symbol)
 
@@ -150,21 +283,18 @@ async def main():
 
                 exit_time = entry_time + timedelta(minutes=1)
 
-                entry_str = entry_time.strftime("%H:%M:%S")
-                exit_str = exit_time.strftime("%H:%M:%S")
-
                 total_signal += 1
 
-                signal_text = f"""
+                signal_message = f"""
 🚧 LIVE FOREX SIGNAL
 
 💷 {symbol}-FX
 
 Signal Time ⏰ {current.strftime('%H:%M:%S')}
 
-Entry ⏳ {entry_str}
+Entry ⏳ {entry_time.strftime('%H:%M:%S')}
 
-Exit ⏳ {exit_str}
+Exit ⏳ {exit_time.strftime('%H:%M:%S')}
 
 ⌚️ M1
 
@@ -173,29 +303,31 @@ Exit ⏳ {exit_str}
 ⚠️ MG1 ENABLED
 """
 
-                await send_message(signal_text)
+                await send_message(signal_message)
 
                 print("SIGNAL SENT:", symbol)
 
-                # WAIT UNTIL TRADE CLOSE
-                wait_seconds = (exit_time - datetime.now(IST)).total_seconds()
+                # WAIT FOR CANDLE CLOSE
+                wait_time = (
+                    exit_time - datetime.now(IST)
+                ).total_seconds()
 
-                if wait_seconds > 0:
-                    await asyncio.sleep(wait_seconds + 2)
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time + 2)
 
-                # GET RESULT CANDLE
-                result_data = get_forex_data(symbol)
+                # GET RESULT
+                result_candle = get_forex_data(symbol)
 
-                if not result_data:
+                if not result_candle:
                     continue
 
-                latest = result_data[0]
+                latest = result_candle[0]
 
-                entry_open = float(latest["open"])
+                open_price = float(latest["open"])
                 close_price = float(latest["close"])
 
                 result = check_result(
-                    entry_open,
+                    open_price,
                     close_price,
                     signal
                 )
@@ -203,46 +335,16 @@ Exit ⏳ {exit_str}
                 # MARTINGALE
                 if result == "LOSS":
 
-                    mg_signal = signal
-
-                    mg_entry = datetime.now(IST).replace(second=0, microsecond=0)
-                    mg_exit = mg_entry + timedelta(minutes=1)
-
-                    mg_text = f"""
-⚠️ MARTINGALE 1
-
-💷 {symbol}-FX
-
-Entry ⏳ {mg_entry.strftime('%H:%M:%S')}
-
-Exit ⏳ {mg_exit.strftime('%H:%M:%S')}
-
-{"🟢 BUY" if mg_signal == "BUY" else "🔴 SELL"}
-"""
-
-                    await send_message(mg_text)
-
-                    await asyncio.sleep(62)
-
-                    mg_data = get_forex_data(symbol)
-
-                    latest2 = mg_data[0]
-
-                    mg_open = float(latest2["open"])
-                    mg_close = float(latest2["close"])
-
-                    result = check_result(
-                        mg_open,
-                        mg_close,
-                        mg_signal
+                    await martingale_trade(
+                        symbol,
+                        signal
                     )
 
-                if result == "WIN":
-                    total_win += 1
                 else:
-                    total_loss += 1
 
-                result_text = f"""
+                    total_win += 1
+
+                result_message = f"""
 ✅ RESULT
 
 💷 {symbol}-FX
@@ -252,9 +354,9 @@ Exit ⏳ {mg_exit.strftime('%H:%M:%S')}
 {result}
 """
 
-                await send_message(result_text)
+                await send_message(result_message)
 
-                summary_text = f"""
+                summary_message = f"""
 📊 SUMMARY
 
 Date: {datetime.now(IST).strftime('%d/%m/%Y')}
@@ -266,20 +368,22 @@ Total Win: {total_win}
 Total Loss: {total_loss}
 """
 
-                await send_message(summary_text)
+                await send_message(summary_message)
 
-                print("RESULT SENT:", result)
+                print("RESULT SENT:", symbol)
 
                 await asyncio.sleep(5)
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
         except Exception as e:
+
             print("MAIN ERROR:", e)
+
             await asyncio.sleep(10)
 
 # =========================
-# START
+# START BOT
 # =========================
 
 asyncio.run(main())
