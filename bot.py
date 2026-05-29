@@ -1,204 +1,170 @@
 import os
 import asyncio
 import requests
-import pandas as pd
-
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+import pytz
+from telegram import Bot
 
-print("FOREX SIGNAL BOT STARTED")
-
-IST = ZoneInfo("Asia/Kolkata")
+# =========================
+# CONFIG
+# =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 API_KEY = os.getenv("API_KEY")
 
+bot = Bot(token=BOT_TOKEN)
+
+IST = pytz.timezone("Asia/Kolkata")
+
 pairs = [
-    "EUR/USD",
-    "GBP/USD",
-    "USD/JPY",
-    "EUR/JPY"
+    ("EUR/USD", "EURUSD"),
+    ("GBP/USD", "GBPUSD"),
+    ("USD/JPY", "USDJPY"),
+    ("EUR/JPY", "EURJPY"),
 ]
 
 total_signal = 0
 total_win = 0
 total_loss = 0
 
+# =========================
+# GET LIVE FOREX DATA
+# =========================
 
-async def send_message(text):
-
+def get_forex_data(symbol):
     try:
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1min&outputsize=50&apikey={API_KEY}"
 
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        response = requests.get(url).json()
 
-        requests.post(
-            url,
-            data={
-                "chat_id": CHANNEL_ID,
-                "text": text
-            },
-            timeout=20
-        )
-
-        print("MESSAGE SENT")
-
-    except Exception as e:
-
-        print("TELEGRAM ERROR:", e)
-
-
-def get_data(symbol):
-
-    try:
-
-        url = (
-            f"https://api.twelvedata.com/time_series"
-            f"?symbol={symbol}"
-            f"&interval=1min"
-            f"&outputsize=20"
-            f"&apikey={API_KEY}"
-        )
-
-        response = requests.get(url, timeout=20)
-
-        data = response.json()
-
-        if "values" not in data:
-
-            print(data)
-
+        if "values" not in response:
             return None
 
-        df = pd.DataFrame(data["values"])
+        candles = response["values"]
 
-        df = df.iloc[::-1]
+        return candles
 
-        for col in ["open", "close"]:
-
-            df[col] = df[col].astype(float)
-
-        return df
-
-    except Exception as e:
-
-        print("DATA ERROR:", e)
-
+    except:
         return None
 
+# =========================
+# SIGNAL STRATEGY
+# =========================
 
-def generate_signal(df):
+def generate_signal(candles):
 
-    try:
+    closes = [float(x["close"]) for x in candles[:10]]
 
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
+    last = closes[0]
+    prev = closes[1]
+    prev2 = closes[2]
 
-        current_close = last["close"]
-        current_open = last["open"]
+    # TREND
+    bullish = last > prev > prev2
+    bearish = last < prev < prev2
 
-        previous_close = prev["close"]
+    # MOMENTUM FILTER
+    strength = abs(last - prev)
 
-        candle_size = abs(current_close - current_open)
-
-        if (
-            current_close > current_open
-            and current_close > previous_close
-            and candle_size > 0.00005
-        ):
-
-            return "BUY"
-
-        elif (
-            current_close < current_open
-            and current_close < previous_close
-            and candle_size > 0.00005
-        ):
-
-            return "SELL"
-
-        elif current_close > previous_close:
-
-            return "BUY"
-
-        else:
-
-            return "SELL"
-
-    except Exception as e:
-
-        print("SIGNAL ERROR:", e)
-
+    if strength < 0.0002:
         return None
 
+    if bullish:
+        return "BUY"
 
-def check_result(entry, exitp, signal):
+    if bearish:
+        return "SELL"
+
+    return None
+
+# =========================
+# CHECK RESULT
+# =========================
+
+def check_result(entry_open, close_price, signal):
 
     if signal == "BUY":
+        return "WIN" if close_price > entry_open else "LOSS"
 
-        return "WIN" if exitp > entry else "LOSS"
+    if signal == "SELL":
+        return "WIN" if close_price < entry_open else "LOSS"
 
-    else:
+    return "LOSS"
 
-        return "WIN" if exitp < entry else "LOSS"
+# =========================
+# SEND TELEGRAM
+# =========================
 
+async def send_message(text):
+    try:
+        await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text
+        )
+    except Exception as e:
+        print("TELEGRAM ERROR:", e)
 
-def next_minute():
+# =========================
+# MAIN LOOP
+# =========================
 
-    now = datetime.now(IST)
-
-    return (
-        now.replace(second=0, microsecond=0)
-        + timedelta(minutes=1)
-    )
-
-
-async def process_pair(pair):
+async def main():
 
     global total_signal
     global total_win
     global total_loss
 
-    try:
+    print("LIVE FOREX SIGNAL BOT STARTED")
 
-        print("CHECKING:", pair)
+    while True:
 
-        df = get_data(pair)
+        try:
 
-        if df is None:
+            now = datetime.now(IST)
 
-            return
+            # WAIT UNTIL 58th SECOND
+            if now.second < 58:
+                await asyncio.sleep(1)
+                continue
 
-        signal = generate_signal(df)
+            print("CHECKING LIVE FOREX")
 
-        if signal is None:
+            for pair_name, symbol in pairs:
 
-            return
+                candles = get_forex_data(symbol)
 
-        pair_name = pair.replace("/", "") + "-FX"
+                if not candles:
+                    continue
 
-        entry_dt = next_minute()
+                signal = generate_signal(candles)
 
-        exit_dt = entry_dt + timedelta(minutes=1)
+                if signal is None:
+                    continue
 
-        signal_time = datetime.now(IST).strftime("%H:%M:%S")
+                current = datetime.now(IST)
 
-        entry_time = entry_dt.strftime("%H:%M:00")
+                entry_time = (
+                    current + timedelta(minutes=1)
+                ).replace(second=0, microsecond=0)
 
-        exit_time = exit_dt.strftime("%H:%M:00")
+                exit_time = entry_time + timedelta(minutes=1)
 
-        total_signal += 1
+                entry_str = entry_time.strftime("%H:%M:%S")
+                exit_str = exit_time.strftime("%H:%M:%S")
 
-        signal_text = f"""
+                total_signal += 1
+
+                signal_text = f"""
 🚧 LIVE FOREX SIGNAL
 
-💷 {pair_name}
+💷 {symbol}-FX
 
-Signal Time ⏰ {signal_time}
+Signal Time ⏰ {current.strftime('%H:%M:%S')}
 
-Entry ⏳ {entry_time}
+Entry ⏳ {entry_str}
 
-Exit ⏳ {exit_time}
+Exit ⏳ {exit_str}
 
 ⌚️ M1
 
@@ -207,72 +173,91 @@ Exit ⏳ {exit_time}
 ⚠️ MG1 ENABLED
 """
 
-        await send_message(signal_text)
+                await send_message(signal_text)
 
-        print("SIGNAL SENT")
+                print("SIGNAL SENT:", symbol)
 
-        while datetime.now(IST) < entry_dt:
+                # WAIT UNTIL TRADE CLOSE
+                wait_seconds = (exit_time - datetime.now(IST)).total_seconds()
 
-            await asyncio.sleep(1)
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds + 2)
 
-        entry_df = get_data(pair)
+                # GET RESULT CANDLE
+                result_data = get_forex_data(symbol)
 
-        if entry_df is None:
+                if not result_data:
+                    continue
 
-            return
+                latest = result_data[0]
 
-        entry_price = entry_df["close"].iloc[-1]
+                entry_open = float(latest["open"])
+                close_price = float(latest["close"])
 
-        await asyncio.sleep(60)
+                result = check_result(
+                    entry_open,
+                    close_price,
+                    signal
+                )
 
-        exit_df = get_data(pair)
+                # MARTINGALE
+                if result == "LOSS":
 
-        if exit_df is None:
+                    mg_signal = signal
 
-            return
+                    mg_entry = datetime.now(IST).replace(second=0, microsecond=0)
+                    mg_exit = mg_entry + timedelta(minutes=1)
 
-        exit_price = exit_df["close"].iloc[-1]
+                    mg_text = f"""
+⚠️ MARTINGALE 1
 
-        result = check_result(
-            entry_price,
-            exit_price,
-            signal
-        )
+💷 {symbol}-FX
 
-        if result == "WIN":
+Entry ⏳ {mg_entry.strftime('%H:%M:%S')}
 
-            total_win += 1
+Exit ⏳ {mg_exit.strftime('%H:%M:%S')}
 
-            result_text = f"""
+{"🟢 BUY" if mg_signal == "BUY" else "🔴 SELL"}
+"""
+
+                    await send_message(mg_text)
+
+                    await asyncio.sleep(62)
+
+                    mg_data = get_forex_data(symbol)
+
+                    latest2 = mg_data[0]
+
+                    mg_open = float(latest2["open"])
+                    mg_close = float(latest2["close"])
+
+                    result = check_result(
+                        mg_open,
+                        mg_close,
+                        mg_signal
+                    )
+
+                if result == "WIN":
+                    total_win += 1
+                else:
+                    total_loss += 1
+
+                result_text = f"""
 ✅ RESULT
 
-💷 {pair_name}
+💷 {symbol}-FX
 
 {signal}
 
-WIN
+{result}
 """
 
-        else:
+                await send_message(result_text)
 
-            total_loss += 1
-
-            result_text = f"""
-❌ RESULT
-
-💷 {pair_name}
-
-{signal}
-
-LOSS
-"""
-
-        await send_message(result_text)
-
-        summary = f"""
+                summary_text = f"""
 📊 SUMMARY
 
-Date: {datetime.now(IST).strftime("%d/%m/%Y")}
+Date: {datetime.now(IST).strftime('%d/%m/%Y')}
 
 Total Signal: {total_signal}
 
@@ -281,36 +266,20 @@ Total Win: {total_win}
 Total Loss: {total_loss}
 """
 
-        await send_message(summary)
+                await send_message(summary_text)
 
-        print("SUMMARY SENT")
+                print("RESULT SENT:", result)
 
-    except Exception as e:
+                await asyncio.sleep(5)
 
-        print("PROCESS ERROR:", e)
-
-
-async def main():
-
-    while True:
-
-        try:
-
-            print("CHECKING LIVE FOREX")
-
-            for pair in pairs:
-
-                await process_pair(pair)
-
-                await asyncio.sleep(10)
-
-            await asyncio.sleep(20)
+            await asyncio.sleep(1)
 
         except Exception as e:
-
             print("MAIN ERROR:", e)
+            await asyncio.sleep(10)
 
-            await asyncio.sleep(30)
-
+# =========================
+# START
+# =========================
 
 asyncio.run(main())
