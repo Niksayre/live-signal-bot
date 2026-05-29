@@ -1,28 +1,35 @@
 import asyncio
-import random
 import requests
+import pandas as pd
 from datetime import datetime, timedelta
 import pytz
+
 from telegram import Bot
 
-# =========================
-# TELEGRAM SETTINGS
-# =========================
+# ============================================
+# TELEGRAM CONFIG
+# ============================================
 
 BOT_TOKEN = "8926681279:AAEa-0EQpSoCMTbldp0GE03LNAs5wBNwKqY"
 CHAT_ID = "8241640506"
 
 bot = Bot(token=BOT_TOKEN)
 
-# =========================
-# INDIA TIMEZONE
-# =========================
+# ============================================
+# TIMEZONE
+# ============================================
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# =========================
-# REAL FOREX PAIRS
-# =========================
+# ============================================
+# API CONFIG
+# ============================================
+
+API_KEY = "YOUR_TWELVEDATA_API_KEY"
+
+# ============================================
+# FOREX PAIRS
+# ============================================
 
 PAIRS = [
     "EUR/USD",
@@ -31,182 +38,265 @@ PAIRS = [
     "AUD/USD",
     "USD/CAD",
     "EUR/JPY",
-    "GBP/JPY",
+    "GBP/JPY"
 ]
 
-# =========================
-# SUMMARY
-# =========================
+# ============================================
+# STATISTICS
+# ============================================
 
 total_signal = 0
 total_win = 0
 total_loss = 0
 
-# =========================
-# GET MARKET PRICE
-# =========================
+last_trade_time = None
 
-def get_market_price():
+# ============================================
+# GET REAL MARKET DATA
+# ============================================
+
+def get_market_data(symbol):
+
+    url = (
+        f"https://api.twelvedata.com/time_series"
+        f"?symbol={symbol}"
+        f"&interval=1min"
+        f"&outputsize=100"
+        f"&apikey={API_KEY}"
+    )
+
     try:
-        url = "https://api.exchangerate.host/latest?base=USD&symbols=EUR"
         response = requests.get(url, timeout=10)
         data = response.json()
 
-        if "rates" in data:
-            return float(data["rates"]["EUR"])
+        if "values" not in data:
+            return None
 
-    except:
+        df = pd.DataFrame(data["values"])
+
+        df = df.iloc[::-1]
+
+        for col in ["open", "high", "low", "close"]:
+            df[col] = df[col].astype(float)
+
+        return df
+
+    except Exception as e:
+        print("MARKET ERROR:", e)
         return None
 
-# =========================
-# STRONG SIGNAL FILTER
-# =========================
+# ============================================
+# RSI
+# ============================================
 
-def generate_signal():
+def calculate_rsi(df, period=14):
 
-    market = get_market_price()
+    delta = df["close"].diff()
 
-    if market is None:
+    gain = delta.clip(lower=0)
+
+    loss = -1 * delta.clip(upper=0)
+
+    avg_gain = gain.rolling(period).mean()
+
+    avg_loss = loss.rolling(period).mean()
+
+    rs = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.iloc[-1]
+
+# ============================================
+# EMA TREND
+# ============================================
+
+def ema_signal(df):
+
+    ema_fast = df["close"].ewm(span=9).mean()
+
+    ema_slow = df["close"].ewm(span=21).mean()
+
+    if ema_fast.iloc[-1] > ema_slow.iloc[-1]:
+        return "BUY"
+
+    elif ema_fast.iloc[-1] < ema_slow.iloc[-1]:
+        return "SELL"
+
+    return "WAIT"
+
+# ============================================
+# SUPPORT / RESISTANCE
+# ============================================
+
+def support(df):
+    return df["low"].tail(20).min()
+
+def resistance(df):
+    return df["high"].tail(20).max()
+
+# ============================================
+# GENERATE SIGNAL
+# ============================================
+
+def generate_signal(symbol):
+
+    df = get_market_data(symbol)
+
+    if df is None or len(df) < 50:
         return None
 
-    strength = random.randint(1, 100)
+    current_price = df["close"].iloc[-1]
 
-    # ONLY STRONG SETUPS
-    if strength < 85:
-        return None
+    sup = support(df)
 
-    pair = random.choice(PAIRS)
+    res = resistance(df)
 
-    direction = random.choice(["BUY", "SELL"])
+    rsi = calculate_rsi(df)
 
-    return {
-        "pair": pair,
-        "direction": direction
-    }
+    trend = ema_signal(df)
 
-# =========================
-# FORMAT COLORS
-# =========================
+    prev_close = df["close"].iloc[-2]
 
-def signal_text(direction):
+    bullish = current_price > prev_close
 
-    if direction == "BUY":
-        return "🟢 BUY ⬆️"
+    bearish = current_price < prev_close
 
-    return "🔴 SELL ⬇️"
+    near_support = abs(current_price - sup) <= 0.0015
 
-# =========================
-# RESULT CHECK
-# =========================
+    near_resistance = abs(current_price - res) <= 0.0015
 
-async def check_result(signal):
+    # BUY SIGNAL
 
-    global total_signal
-    global total_win
-    global total_loss
+    if (
+        near_support
+        and trend == "BUY"
+        and rsi < 45
+        and bullish
+    ):
 
-    pair = signal["pair"]
-    direction = signal["direction"]
+        return {
+            "signal": "BUY",
+            "price": current_price
+        }
 
-    # WAIT FOR ENTRY
-    now = datetime.now(IST)
+    # SELL SIGNAL
 
-    next_minute = (now + timedelta(minutes=1)).replace(second=0)
+    if (
+        near_resistance
+        and trend == "SELL"
+        and rsi > 55
+        and bearish
+    ):
 
-    wait_seconds = (next_minute - now).seconds
+        return {
+            "signal": "SELL",
+            "price": current_price
+        }
 
-    await asyncio.sleep(wait_seconds)
+    return None
 
-    entry_time = datetime.now(IST)
+# ============================================
+# FORMAT SIGNAL
+# ============================================
 
-    # ENTRY PRICE
-    entry_price = random.uniform(1.0000, 2.0000)
+def create_signal_message(pair, signal, signal_time, entry, exit_time):
 
-    # WAIT FOR CANDLE CLOSE
-    await asyncio.sleep(60)
+    if signal == "BUY":
 
-    exit_price = entry_price + random.uniform(-0.0050, 0.0050)
+        side = "🟢 BUY ⬆️"
 
-    result = "LOSS"
+    else:
 
-    if direction == "BUY" and exit_price > entry_price:
-        result = "WIN"
+        side = "🔴 SELL ⬇️"
 
-    if direction == "SELL" and exit_price < entry_price:
-        result = "WIN"
-
-    mg_used = False
-
-    # =========================
-    # MG1
-    # =========================
-
-    if result == "LOSS":
-
-        mg_used = True
-
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"""
-⚠️ MG1 STARTED
+    msg = f"""
+🚧 LIVE FOREX SIGNAL
 
 💷 {pair}
 
-{signal_text(direction)}
+🕒 Signal Time ⏰ {signal_time}
 
-⏳ WAITING NEXT CANDLE
+⏳ Entry Time ⏰ {entry}
+
+⌛ Exit Time ⏰ {exit_time}
+
+📊 Timeframe: M1
+
+{side}
+
+⚠️ MG1 ENABLED
+
+🔥 REAL MARKET SIGNAL
 """
-        )
 
-        await asyncio.sleep(60)
+    return msg
 
-        mg_result = random.choice(["WIN", "LOSS"])
+# ============================================
+# CHECK RESULT
+# ============================================
 
-        if mg_result == "WIN":
-            result = "WIN"
+def check_result(signal_type, entry_price, close_price):
 
-    # =========================
-    # FINAL RESULT
-    # =========================
+    if signal_type == "BUY":
 
-    total_signal += 1
+        return close_price > entry_price
 
-    if result == "WIN":
-        total_win += 1
     else:
+
+        return close_price < entry_price
+
+# ============================================
+# SEND RESULT
+# ============================================
+
+async def send_result(pair, signal_type, result, mg=False):
+
+    global total_win
+    global total_loss
+
+    if signal_type == "BUY":
+        side = "🟢 BUY ⬆️"
+    else:
+        side = "🔴 SELL ⬇️"
+
+    if result:
+
+        if mg:
+            res = "✅ WIN MG1"
+        else:
+            res = "✅ WIN"
+
+        total_win += 1
+
+    else:
+
+        res = "❌ LOSS"
+
         total_loss += 1
 
-    result_icon = "✅ WIN" if result == "WIN" else "❌ LOSS"
-
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text=f"""
+    msg = f"""
 📢 TRADE RESULT
 
 💷 {pair}
 
-{signal_text(direction)}
+{side}
 
-{result_icon}
-
-{"⚠️ WON WITH MG1" if mg_used and result == "WIN" else ""}
-
-⌛ Candle Closed
+{res}
 """
-    )
 
-    # =========================
-    # SUMMARY
-    # =========================
+    await bot.send_message(chat_id=CHAT_ID, text=msg)
 
-    date_now = datetime.now(IST).strftime("%d/%m/%Y")
+# ============================================
+# SEND SUMMARY
+# ============================================
 
-    await bot.send_message(
-        chat_id=CHAT_ID,
-        text=f"""
+async def send_summary():
+
+    msg = f"""
 📊 SUMMARY
 
-📅 Date: {date_now}
+📅 Date: {datetime.now(IST).strftime('%d/%m/%Y')}
 
 🎯 Total Signal: {total_signal}
 
@@ -214,78 +304,204 @@ async def check_result(signal):
 
 ❌ Total Loss: {total_loss}
 """
-    )
 
-    # =========================
-    # 1 MINUTE BREAK
-    # =========================
+    await bot.send_message(chat_id=CHAT_ID, text=msg)
 
-    await asyncio.sleep(60)
+# ============================================
+# MAIN BOT LOOP
+# ============================================
 
-# =========================
-# MAIN LOOP
-# =========================
+async def run_bot():
 
-async def main():
+    global total_signal
+    global last_trade_time
 
     print("LIVE FOREX BOT STARTED")
 
     while True:
 
-        signal = generate_signal()
+        try:
 
-        # NO WEAK SIGNALS
-        if signal is None:
+            now = datetime.now(IST)
 
-            await asyncio.sleep(30)
-            continue
+            # NO CONTINUOUS SPAM
 
-        now = datetime.now(IST)
+            if last_trade_time:
 
-        signal_time = now.strftime("%H:%M:%S")
+                diff = (now - last_trade_time).seconds
 
-        entry = (now + timedelta(minutes=1)).replace(second=0)
+                if diff < 60:
 
-        exit_time = entry + timedelta(minutes=1)
+                    await asyncio.sleep(5)
+                    continue
 
-        pair = signal["pair"]
-        direction = signal["direction"]
+            found_signal = False
 
-        # =========================
-        # SEND SIGNAL
-        # =========================
+            for pair in PAIRS:
 
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"""
-🚧 LIVE FOREX SIGNAL
+                print(f"CHECKING {pair}")
 
-💷 {pair}
+                signal_data = generate_signal(pair)
 
-🕒 Signal Time ⏰ {signal_time}
+                if signal_data is None:
+                    continue
 
-⏳ Entry Time ⏰ {entry.strftime("%H:%M:%S")}
+                found_signal = True
 
-⌛ Exit Time ⏰ {exit_time.strftime("%H:%M:%S")}
+                total_signal += 1
 
-📊 Timeframe: M1
+                signal_type = signal_data["signal"]
 
-{signal_text(direction)}
+                signal_time = now.strftime("%H:%M:%S")
 
-⚠️ MG1 ENABLED
+                # ENTRY NEXT MINUTE
 
-🔥 REAL MARKET BASED
-"""
-        )
+                entry_time_dt = (now + timedelta(minutes=1)).replace(second=0)
 
-        # =========================
-        # WAIT RESULT
-        # =========================
+                exit_time_dt = entry_time_dt + timedelta(minutes=1)
 
-        await check_result(signal)
+                entry_time = entry_time_dt.strftime("%H:%M:%S")
 
-# =========================
+                exit_time = exit_time_dt.strftime("%H:%M:%S")
+
+                message = create_signal_message(
+                    pair,
+                    signal_type,
+                    signal_time,
+                    entry_time,
+                    exit_time
+                )
+
+                await bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=message
+                )
+
+                last_trade_time = datetime.now(IST)
+
+                # WAIT FOR ENTRY
+
+                wait_entry = (entry_time_dt - datetime.now(IST)).total_seconds()
+
+                if wait_entry > 0:
+                    await asyncio.sleep(wait_entry)
+
+                # ENTRY PRICE
+
+                entry_df = get_market_data(pair)
+
+                if entry_df is None:
+                    continue
+
+                entry_price = entry_df["close"].iloc[-1]
+
+                # WAIT FOR EXIT
+
+                wait_exit = (exit_time_dt - datetime.now(IST)).total_seconds()
+
+                if wait_exit > 0:
+                    await asyncio.sleep(wait_exit)
+
+                # CLOSE PRICE
+
+                close_df = get_market_data(pair)
+
+                if close_df is None:
+                    continue
+
+                close_price = close_df["close"].iloc[-1]
+
+                # DIRECT RESULT
+
+                win = check_result(
+                    signal_type,
+                    entry_price,
+                    close_price
+                )
+
+                # ====================================
+                # DIRECT WIN
+                # ====================================
+
+                if win:
+
+                    await send_result(
+                        pair,
+                        signal_type,
+                        True,
+                        False
+                    )
+
+                # ====================================
+                # MG1
+                # ====================================
+
+                else:
+
+                    mg_entry_dt = datetime.now(IST).replace(second=0) + timedelta(minutes=1)
+
+                    mg_exit_dt = mg_entry_dt + timedelta(minutes=1)
+
+                    wait_mg = (mg_entry_dt - datetime.now(IST)).total_seconds()
+
+                    if wait_mg > 0:
+                        await asyncio.sleep(wait_mg)
+
+                    mg_entry_df = get_market_data(pair)
+
+                    if mg_entry_df is None:
+                        continue
+
+                    mg_entry_price = mg_entry_df["close"].iloc[-1]
+
+                    wait_mg_exit = (mg_exit_dt - datetime.now(IST)).total_seconds()
+
+                    if wait_mg_exit > 0:
+                        await asyncio.sleep(wait_mg_exit)
+
+                    mg_close_df = get_market_data(pair)
+
+                    if mg_close_df is None:
+                        continue
+
+                    mg_close_price = mg_close_df["close"].iloc[-1]
+
+                    mg_win = check_result(
+                        signal_type,
+                        mg_entry_price,
+                        mg_close_price
+                    )
+
+                    await send_result(
+                        pair,
+                        signal_type,
+                        mg_win,
+                        True
+                    )
+
+                # SUMMARY AFTER RESULT
+
+                await send_summary()
+
+                # 1 MIN BREAK AFTER TRADE
+
+                await asyncio.sleep(60)
+
+                break
+
+            if not found_signal:
+                print("NO STRONG SIGNAL")
+
+            await asyncio.sleep(15)
+
+        except Exception as e:
+
+            print("BOT ERROR:", e)
+
+            await asyncio.sleep(10)
+
+# ============================================
 # START BOT
-# =========================
+# ============================================
 
-asyncio.run(main())
+asyncio.run(run_bot())
