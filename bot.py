@@ -20,14 +20,6 @@ PAIRS = [
 "AUDUSD"
 ]
 
-TIMEFRAMES = {
-"M1": 1,
-"M2": 2,
-"M5": 5
-}
-
-MG_ENABLED = True
-
 total_signal = 0
 total_win = 0
 total_loss = 0
@@ -35,7 +27,7 @@ total_loss = 0
 def get_forex_data(pair):
 
 ```
-url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval=1min&outputsize=120&apikey=demo"
+url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval=1min&outputsize=100&apikey=demo"
 
 try:
 
@@ -44,13 +36,12 @@ try:
     candles = response["values"]
 
     closes = [float(x["close"]) for x in candles]
-    highs = [float(x["high"]) for x in candles]
-    lows = [float(x["low"]) for x in candles]
     opens = [float(x["open"]) for x in candles]
 
-    return opens, highs, lows, closes
+    return opens, closes
 
 except:
+
     return None
 ```
 
@@ -59,15 +50,13 @@ def ema(data, period):
 ```
 multiplier = 2 / (period + 1)
 
-ema_values = [sum(data[:period]) / period]
+ema_value = sum(data[:period]) / period
 
 for price in data[period:]:
 
-    ema_values.append(
-        (price - ema_values[-1]) * multiplier + ema_values[-1]
-    )
+    ema_value = ((price - ema_value) * multiplier) + ema_value
 
-return ema_values[-1]
+return ema_value
 ```
 
 def rsi(closes, period=14):
@@ -99,24 +88,6 @@ rs = avg_gain / avg_loss
 return 100 - (100 / (1 + rs))
 ```
 
-def macd(closes):
-
-```
-ema12 = ema(closes, 12)
-ema26 = ema(closes, 26)
-
-return ema12 - ema26
-```
-
-def strong_trend(closes):
-
-```
-ema20 = ema(closes, 20)
-ema50 = ema(closes, 50)
-
-return abs(ema20 - ema50) > 0.0005
-```
-
 def generate_signal(pair):
 
 ```
@@ -125,73 +96,47 @@ data = get_forex_data(pair)
 if not data:
     return None
 
-opens, highs, lows, closes = data
+opens, closes = data
 
 ema20 = ema(closes, 20)
 ema50 = ema(closes, 50)
 
 current_rsi = rsi(closes)
 
-current_macd = macd(closes)
-
 bullish = closes[-1] > opens[-1]
 bearish = closes[-1] < opens[-1]
-
-trend = strong_trend(closes)
 
 if (
     ema20 > ema50 and
     current_rsi > 55 and
-    current_macd > 0 and
-    bullish and
-    trend
+    bullish
 ):
     return "BUY"
 
 if (
     ema20 < ema50 and
     current_rsi < 45 and
-    current_macd < 0 and
-    bearish and
-    trend
+    bearish
 ):
     return "SELL"
 
 return None
 ```
 
-async def send_message(text):
+async def send_message(message):
 
 ```
 try:
 
     await bot.send_message(
         chat_id=CHAT_ID,
-        text=text,
+        text=message,
         parse_mode="HTML"
     )
 
 except Exception as e:
 
     print(e)
-```
-
-def check_result(direction, entry, exit):
-
-```
-if direction == "BUY":
-
-    if exit > entry:
-        return "WIN"
-
-    return "LOSS"
-
-if direction == "SELL":
-
-    if exit < entry:
-        return "WIN"
-
-    return "LOSS"
 ```
 
 async def run_bot():
@@ -219,13 +164,13 @@ while True:
 
                 total_signal += 1
 
+                signal_time = now.strftime("%H:%M:%S")
+
                 entry_time = (
                     now + timedelta(minutes=1)
                 ).replace(second=0)
 
                 exit_time = entry_time + timedelta(minutes=5)
-
-                signal_time = now.strftime("%H:%M:%S")
 
                 entry_str = entry_time.strftime("%H:%M:%S")
 
@@ -233,18 +178,18 @@ while True:
 
                 if signal == "BUY":
 
-                    signal_text = f"""
+                    trade_text = f"""
 ```
 
 🚧 <b>LIVE FOREX SIGNAL</b>
 
 💷 <b>{pair}-FX</b>
 
-Signal Time ⏰ <b>{signal_time}</b>
+Signal Time ⏰ {signal_time}
 
-Entry ⏳ <b>{entry_str}</b>
+Entry ⏳ {entry_str}
 
-Exit ⏳ <b>{exit_str}</b>
+Exit ⏳ {exit_str}
 
 ⌚️ <b>M5</b>
 
@@ -256,18 +201,18 @@ Exit ⏳ <b>{exit_str}</b>
 ```
                 else:
 
-                    signal_text = f"""
+                    trade_text = f"""
 ```
 
 🚧 <b>LIVE FOREX SIGNAL</b>
 
 💷 <b>{pair}-FX</b>
 
-Signal Time ⏰ <b>{signal_time}</b>
+Signal Time ⏰ {signal_time}
 
-Entry ⏳ <b>{entry_str}</b>
+Entry ⏳ {entry_str}
 
-Exit ⏳ <b>{exit_str}</b>
+Exit ⏳ {exit_str}
 
 ⌚️ <b>M5</b>
 
@@ -277,43 +222,42 @@ Exit ⏳ <b>{exit_str}</b>
 """
 
 ```
-                await send_message(signal_text)
+                await send_message(trade_text)
 
-                entry_wait = (
+                wait_entry = (
                     entry_time - datetime.now(TIMEZONE)
                 ).total_seconds()
 
-                if entry_wait > 0:
-                    await asyncio.sleep(entry_wait)
+                if wait_entry > 0:
+                    await asyncio.sleep(wait_entry)
 
                 entry_data = get_forex_data(pair)
 
-                entry_price = entry_data[3][-1]
+                entry_price = entry_data[1][-1]
 
-                exit_wait = (
+                wait_exit = (
                     exit_time - datetime.now(TIMEZONE)
                 ).total_seconds()
 
-                if exit_wait > 0:
-                    await asyncio.sleep(exit_wait)
+                if wait_exit > 0:
+                    await asyncio.sleep(wait_exit)
 
                 exit_data = get_forex_data(pair)
 
-                exit_price = exit_data[3][-1]
+                exit_price = exit_data[1][-1]
 
-                result = check_result(
-                    signal,
-                    entry_price,
-                    exit_price
-                )
+                result = "LOSS"
+
+                if signal == "BUY" and exit_price > entry_price:
+                    result = "WIN"
+
+                if signal == "SELL" and exit_price < entry_price:
+                    result = "WIN"
 
                 if result == "WIN":
                     total_win += 1
-                    final_result = "🔥 DIRECT WIN"
-
                 else:
                     total_loss += 1
-                    final_result = "❌ LOSS"
 
                 result_text = f"""
 ```
@@ -323,8 +267,6 @@ Exit ⏳ <b>{exit_str}</b>
 💷 <b>{pair}-FX</b>
 
 🏆 <b>{result}</b>
-
-{final_result}
 """
 
 ```
