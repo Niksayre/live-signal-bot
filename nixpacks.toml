@@ -1,5 +1,6 @@
 [phases.setup]
 nixPkgs = ["python311"]
 
-[start]
-cmd = "python bot.py"
+[variables]
+PYTHONUNBUFFERED = "1"
+MISE_PYTHON_GITHUB_ATTESTATIONS = "false"
