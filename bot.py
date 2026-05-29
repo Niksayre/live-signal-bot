@@ -1,145 +1,129 @@
+import os
 import asyncio
-import requests
+import random
 from datetime import datetime, timedelta
+
 from telegram import Bot
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 bot = Bot(token=BOT_TOKEN)
-
-PAIRS = [
-"EURUSD",
-"GBPUSD",
-"USDJPY"
-]
 
 total_signal = 0
 total_win = 0
 total_loss = 0
 
+pairs = [
+    "EURUSD-FX",
+    "GBPUSD-FX",
+    "USDJPY-FX",
+    "AUDUSD-FX",
+    "EURJPY-FX",
+]
+
+timeframes = [1, 2, 5]
+
+
 def get_signal():
+    pair = random.choice(pairs)
+    timeframe = random.choice(timeframes)
 
-```
-url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+    direction = random.choice(["BUY", "SELL"])
 
-try:
+    if direction == "BUY":
+        arrow = "🟢"
+        call = "UP"
+    else:
+        arrow = "🔴"
+        call = "DOWN"
 
-    data = requests.get(url).json()
+    now = datetime.now()
 
-    price = float(data["price"])
+    next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
 
-    if int(price) % 2 == 0:
-        return "BUY"
+    exit_time = next_minute + timedelta(minutes=timeframe)
 
-    return "SELL"
+    signal_time = now.strftime("%H:%M:%S")
+    entry_time = next_minute.strftime("%H:%M:%S")
+    close_time = exit_time.strftime("%H:%M:%S")
 
-except:
+    return {
+        "pair": pair,
+        "timeframe": timeframe,
+        "direction": direction,
+        "arrow": arrow,
+        "call": call,
+        "signal_time": signal_time,
+        "entry_time": entry_time,
+        "close_time": close_time,
+    }
 
-    return None
-```
 
-async def send_signal(pair, signal):
-
-```
-global total_signal
-global total_win
-global total_loss
-
-total_signal += 1
-
-now = datetime.now()
-
-signal_time = now.strftime("%H:%M:%S")
-
-entry = (now + timedelta(minutes=1)).replace(second=0)
-
-exit_time = entry + timedelta(minutes=1)
-
-entry_str = entry.strftime("%H:%M:%S")
-
-exit_str = exit_time.strftime("%H:%M:%S")
-
-if signal == "BUY":
-
-    trade_text = f"""
-```
-
+async def send_signal(signal):
+    message = f"""
 🚧 LIVE FOREX SIGNAL
 
-💷 {pair}-FX
+💷 {signal['pair']}
 
-Signal Time ⏰ {signal_time}
+Signal Time ⏰ {signal['signal_time']}
 
-Entry ⏳ {entry_str}
+Entry ⏳ {signal['entry_time']}
 
-Exit ⏳ {exit_str}
+Exit ⏳ {signal['close_time']}
 
-⌚️ M1
+⌚️ M{signal['timeframe']}
 
-🟢 BUY / UP
+{signal['arrow']} {signal['direction']} ({signal['call']})
 
 ⚠️ MG1 ENABLED
 """
 
-```
-else:
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=message
+    )
 
-    trade_text = f"""
-```
 
-🚧 LIVE FOREX SIGNAL
+async def send_result(signal):
+    global total_signal
+    global total_win
+    global total_loss
 
-💷 {pair}-FX
+    total_signal += 1
 
-Signal Time ⏰ {signal_time}
+    result = random.choice(["WIN", "LOSS"])
 
-Entry ⏳ {entry_str}
+    mg_used = False
 
-Exit ⏳ {exit_str}
+    if result == "LOSS":
+        mg_result = random.choice(["WIN", "LOSS"])
 
-⌚️ M1
+        if mg_result == "WIN":
+            result = "WIN"
+            mg_used = True
 
-🔴 SELL / DOWN
+    if result == "WIN":
+        total_win += 1
+        emoji = "✅"
+    else:
+        total_loss += 1
+        emoji = "❌"
 
-⚠️ MG1 ENABLED
-"""
+    if mg_used:
+        result_text = f"{emoji} RESULT AFTER MG1\n\n💷 {signal['pair']}\n\n{signal['direction']}\n\nMG1 WIN ✅"
+    else:
+        result_text = f"{emoji} RESULT\n\n💷 {signal['pair']}\n\n{signal['direction']}\n\n{result}"
 
-```
-await bot.send_message(
-    chat_id=CHAT_ID,
-    text=trade_text
-)
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=result_text
+    )
 
-wait_time = (exit_time - datetime.now()).total_seconds()
-
-if wait_time > 0:
-    await asyncio.sleep(wait_time)
-
-result = "WIN"
-
-total_win += 1
-
-result_text = f"""
-```
-
-✅ RESULT
-
-💷 {pair}-FX
-
-🏆 {result}
-"""
-
-```
-await bot.send_message(
-    chat_id=CHAT_ID,
-    text=result_text
-)
-
-summary = f"""
-```
-
+    summary = f"""
 📊 SUMMARY
+
+Date: {datetime.now().strftime("%d/%m/%Y")}
 
 Total Signal: {total_signal}
 
@@ -148,31 +132,41 @@ Total Win: {total_win}
 Total Loss: {total_loss}
 """
 
-```
-await bot.send_message(
-    chat_id=CHAT_ID,
-    text=summary
-)
-```
+    await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=summary
+    )
+
 
 async def main():
+    print("LIVE FOREX SIGNAL BOT STARTED")
 
-```
-print("BOT STARTED")
+    while True:
+        try:
+            print("CHECKING LIVE FOREX")
 
-while True:
+            signal = get_signal()
 
-    for pair in PAIRS:
+            print(f"SIGNAL: {signal['pair']}")
 
-        signal = get_signal()
+            await send_signal(signal)
 
-        if signal:
+            wait_seconds = (
+                signal['timeframe'] * 60
+            ) + 60
 
-            await send_signal(pair, signal)
+            await asyncio.sleep(wait_seconds)
+
+            await send_result(signal)
+
+            print("RESULT SENT")
 
             await asyncio.sleep(60)
 
-    await asyncio.sleep(5)
-```
+        except Exception as e:
+            print(f"ERROR: {e}")
+            await asyncio.sleep(10)
 
-asyncio.run(main())
+
+if __name__ == "__main__":
+    asyncio.run(main())
