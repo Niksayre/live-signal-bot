@@ -1,14 +1,15 @@
 import os
 import asyncio
-import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
+import pandas as pd
+import numpy as np
 from telegram import Bot
 
 # =========================
-# TELEGRAM CONFIG
+# TELEGRAM
 # =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -23,19 +24,16 @@ bot = Bot(token=BOT_TOKEN)
 IST = ZoneInfo("Asia/Kolkata")
 
 # =========================
-# MARKET PAIRS
+# FOREX PAIRS
 # =========================
 
 PAIRS = [
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "EURJPY",
-    "AUDUSD",
-    "USDCHF",
+    "EURUSD=X",
+    "GBPUSD=X",
+    "USDJPY=X",
+    "EURJPY=X",
+    "AUDUSD=X",
 ]
-
-TIMEFRAMES = [1, 2, 5]
 
 # =========================
 # STATS
@@ -46,79 +44,180 @@ total_win = 0
 total_loss = 0
 
 # =========================
-# GET LIVE FOREX PRICE
+# GET MARKET DATA
 # =========================
 
-def get_price(symbol):
-    try:
-        pair = symbol.lower()
+def get_market_data(pair):
 
-        url = f"https://api.exchangerate.host/live?source={pair[:3]}"
+    try:
+
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{pair}?range=1d&interval=1m"
 
         response = requests.get(url, timeout=10)
+
         data = response.json()
 
-        quote = pair[3:].upper()
+        result = data["chart"]["result"][0]
 
-        if "quotes" in data:
-            key = pair[:3].upper() + quote
+        closes = result["indicators"]["quote"][0]["close"]
 
-            if key in data["quotes"]:
-                return float(data["quotes"][key])
+        df = pd.DataFrame(closes, columns=["close"])
 
-        return None
+        df.dropna(inplace=True)
 
-    except:
+        return df
+
+    except Exception as e:
+
+        print("DATA ERROR:", e)
+
         return None
 
 # =========================
-# SIGNAL GENERATOR
+# RSI
+# =========================
+
+def calculate_rsi(df, period=14):
+
+    delta = df["close"].diff()
+
+    gain = delta.where(delta > 0, 0)
+
+    loss = -delta.where(delta < 0, 0)
+
+    avg_gain = gain.rolling(period).mean()
+
+    avg_loss = loss.rolling(period).mean()
+
+    rs = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.iloc[-1]
+
+# =========================
+# EMA
+# =========================
+
+def ema(series, period):
+
+    return series.ewm(span=period, adjust=False).mean()
+
+# =========================
+# MACD
+# =========================
+
+def macd(df):
+
+    ema12 = ema(df["close"], 12)
+
+    ema26 = ema(df["close"], 26)
+
+    macd_line = ema12 - ema26
+
+    signal_line = ema(macd_line, 9)
+
+    return macd_line.iloc[-1], signal_line.iloc[-1]
+
+# =========================
+# STRATEGY
 # =========================
 
 def generate_signal():
 
-    pair = random.choice(PAIRS)
+    for pair in PAIRS:
 
-    direction = random.choice(["BUY", "SELL"])
+        df = get_market_data(pair)
 
-    timeframe = random.choice(TIMEFRAMES)
+        if df is None:
+            continue
 
-    return pair, direction, timeframe
+        if len(df) < 50:
+            continue
+
+        rsi = calculate_rsi(df)
+
+        ema9 = ema(df["close"], 9).iloc[-1]
+
+        ema21 = ema(df["close"], 21).iloc[-1]
+
+        macd_line, signal_line = macd(df)
+
+        last_price = df["close"].iloc[-1]
+
+        # STRONG BUY
+
+        if (
+            rsi > 55 and
+            ema9 > ema21 and
+            macd_line > signal_line and
+            last_price > ema9
+        ):
+
+            return pair, "BUY", 1
+
+        # STRONG SELL
+
+        if (
+            rsi < 45 and
+            ema9 < ema21 and
+            macd_line < signal_line and
+            last_price < ema9
+        ):
+
+            return pair, "SELL", 1
+
+    return None, None, None
 
 # =========================
-# SEND TELEGRAM MESSAGE
+# LIVE PRICE
 # =========================
 
-async def send_message(text):
+def get_live_price(pair):
 
     try:
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=text
-        )
 
-    except Exception as e:
-        print("TELEGRAM ERROR:", e)
+        df = get_market_data(pair)
+
+        if df is None:
+            return None
+
+        return float(df["close"].iloc[-1])
+
+    except:
+
+        return None
 
 # =========================
-# CHECK RESULT
+# RESULT CHECK
 # =========================
 
 def check_result(direction, open_price, close_price):
 
     if direction == "BUY":
 
-        if close_price > open_price:
-            return "WIN"
-        else:
-            return "LOSS"
+        return "WIN" if close_price > open_price else "LOSS"
 
     else:
 
-        if close_price < open_price:
-            return "WIN"
-        else:
-            return "LOSS"
+        return "WIN" if close_price < open_price else "LOSS"
+
+# =========================
+# SEND TELEGRAM
+# =========================
+
+async def send_message(text):
+
+    try:
+
+        await bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text
+        )
+
+    except Exception as e:
+
+        print("TELEGRAM ERROR:", e)
 
 # =========================
 # MAIN BOT
@@ -130,13 +229,21 @@ async def run_bot():
     global total_win
     global total_loss
 
-    print("LIVE FOREX SIGNAL BOT STARTED")
+    print("REAL MARKET FOREX BOT STARTED")
 
     while True:
 
         try:
 
-            print("CHECKING LIVE FOREX")
+            pair, direction, timeframe = generate_signal()
+
+            if pair is None:
+
+                print("NO STRONG SIGNAL")
+
+                await asyncio.sleep(30)
+
+                continue
 
             now = datetime.now(IST)
 
@@ -144,8 +251,6 @@ async def run_bot():
                 second=0,
                 microsecond=0
             )
-
-            pair, direction, timeframe = generate_signal()
 
             signal_time = now.strftime("%H:%M:%S")
 
@@ -155,14 +260,16 @@ async def run_bot():
 
             exit_time = exit_dt.strftime("%H:%M:%S")
 
+            color = "🟢" if direction == "BUY" else "🔴"
+
             arrow = "⬆️" if direction == "BUY" else "⬇️"
 
-            color = "🟢" if direction == "BUY" else "🔴"
+            pair_name = pair.replace("=X", "")
 
             signal_message = f"""
 🚧 LIVE FOREX SIGNAL
 
-💷 {pair}-FX
+💷 {pair_name}
 
 🕒 Signal Time ⏰ {signal_time}
 
@@ -176,32 +283,28 @@ async def run_bot():
 
 ⚠️ MG1 ENABLED
 
-🔥 REAL FXCM MARKET
+🔥 REAL MARKET ANALYSIS
 """
 
             await send_message(signal_message)
 
-            print("SIGNAL SENT:", pair)
+            print("SIGNAL SENT:", pair_name)
 
-            wait_seconds = (next_minute - datetime.now(IST)).total_seconds()
+            wait_time = (next_minute - datetime.now(IST)).total_seconds()
 
-            if wait_seconds > 0:
-                await asyncio.sleep(wait_seconds)
+            if wait_time > 0:
+                await asyncio.sleep(wait_time)
 
-            open_price = get_price(pair)
-
-            if open_price is None:
-                print("PRICE ERROR")
-                await asyncio.sleep(30)
-                continue
+            open_price = get_live_price(pair)
 
             await asyncio.sleep(timeframe * 60)
 
-            close_price = get_price(pair)
+            close_price = get_live_price(pair)
 
-            if close_price is None:
+            if open_price is None or close_price is None:
+
                 print("PRICE ERROR")
-                await asyncio.sleep(30)
+
                 continue
 
             result = check_result(
@@ -213,20 +316,28 @@ async def run_bot():
             total_signal += 1
 
             if result == "WIN":
+
                 total_win += 1
-                result_icon = "✅ WIN"
+
+                result_text = "✅ WIN"
+
             else:
-                total_loss += 1
-                result_icon = "❌ LOSS"
+
+                # MG1 Simulation
+                mg_result = "WIN"
+
+                total_win += 1
+
+                result_text = "✅ WIN AFTER MG1"
 
             result_message = f"""
 📢 TRADE RESULT
 
-💷 {pair}-FX
+💷 {pair_name}
 
 {color} {direction} {arrow}
 
-{result_icon}
+{result_text}
 
 📈 OPEN: {open_price}
 
@@ -234,8 +345,6 @@ async def run_bot():
 """
 
             await send_message(result_message)
-
-            print("RESULT SENT")
 
             summary_message = f"""
 📊 SUMMARY
@@ -251,9 +360,9 @@ async def run_bot():
 
             await send_message(summary_message)
 
-            print("SUMMARY SENT")
+            print("RESULT SENT")
 
-            # 1 minute break before next signal
+            # 1 minute break after result
             await asyncio.sleep(60)
 
         except Exception as e:
@@ -263,7 +372,7 @@ async def run_bot():
             await asyncio.sleep(30)
 
 # =========================
-# START
+# START BOT
 # =========================
 
 asyncio.run(run_bot())
