@@ -16,19 +16,19 @@ CHAT_ID = "8241640506"
 bot = Bot(token=BOT_TOKEN)
 
 # ==========================================
-# API KEY
+# TWELVEDATA API
 # ==========================================
 
 API_KEY = "edf95432c6e84ca98d8f2a8c900e7e05"
 
 # ==========================================
-# INDIA TIME
+# INDIA TIMEZONE
 # ==========================================
 
 IST = pytz.timezone("Asia/Kolkata")
 
 # ==========================================
-# FOREX PAIRS
+# REAL FOREX PAIRS
 # ==========================================
 
 pairs = [
@@ -38,11 +38,11 @@ pairs = [
     "EUR/JPY",
     "GBP/JPY",
     "AUD/USD",
-    "USD/CAD",
+    "USD/CAD"
 ]
 
 # ==========================================
-# STATS
+# DAILY STATS
 # ==========================================
 
 total_signal = 0
@@ -53,18 +53,20 @@ total_loss = 0
 # GET REAL MARKET PRICE
 # ==========================================
 
-def get_price(symbol):
+def get_price(pair):
 
     try:
 
-        url = f"https://api.twelvedata.com/price?symbol={symbol}&apikey={API_KEY}"
+        url = f"https://api.twelvedata.com/price?symbol={pair}&apikey={API_KEY}"
 
         response = requests.get(url, timeout=10)
 
         data = response.json()
 
         if "price" not in data:
+
             print("API ERROR:", data)
+
             return None
 
         return float(data["price"])
@@ -76,7 +78,7 @@ def get_price(symbol):
         return None
 
 # ==========================================
-# STRONG MARKET SETUP
+# STRONG SIGNAL LOGIC
 # ==========================================
 
 def generate_signal():
@@ -98,16 +100,16 @@ def generate_signal():
 
     movement = abs(second_price - first_price)
 
-    # Ignore weak movement
+    # ignore weak market
+
     if movement < 0.00010:
+
         return None
 
-    # BUY
     if second_price > first_price:
 
         signal = "BUY"
 
-    # SELL
     else:
 
         signal = "SELL"
@@ -136,26 +138,24 @@ async def send_message(text):
         print("TELEGRAM ERROR:", e)
 
 # ==========================================
-# RESULT CHECK
+# CHECK RESULT
 # ==========================================
 
-def check_result(signal_type, entry_price, exit_price):
+def check_result(signal, entry_price, exit_price):
 
-    # BUY
-    if signal_type == "BUY":
+    if signal == "BUY":
 
         if exit_price > entry_price:
             return "WIN"
-        else:
-            return "LOSS"
 
-    # SELL
+        return "LOSS"
+
     else:
 
         if exit_price < entry_price:
             return "WIN"
-        else:
-            return "LOSS"
+
+        return "LOSS"
 
 # ==========================================
 # MAIN BOT
@@ -175,26 +175,25 @@ async def main():
 
             now = datetime.now(IST)
 
-            # ==============================
-            # WAIT NEW MINUTE
-            # ==============================
+            # wait next minute
 
             if now.second != 0:
 
                 await asyncio.sleep(1)
                 continue
 
-            # ==============================
-            # FIND SIGNAL
-            # ==============================
+            # ==================================
+            # FIND STRONG SETUP
+            # ==================================
 
             signal_data = generate_signal()
 
             if signal_data is None:
 
-                print("NO STRONG SIGNAL FOUND")
+                print("NO STRONG SIGNAL")
 
                 await asyncio.sleep(60)
+
                 continue
 
             pair = signal_data["pair"]
@@ -206,9 +205,9 @@ async def main():
 
             exit_time = entry_time + timedelta(minutes=1)
 
-            # ==============================
-            # FORMAT SIGNAL
-            # ==============================
+            # ==================================
+            # SIGNAL FORMAT
+            # ==================================
 
             if signal == "BUY":
 
@@ -229,7 +228,7 @@ async def main():
 
 ⚠️ MG1 ENABLED
 
-🔥 REAL MARKET CHECK
+🔥 REAL MARKET
 """
 
             else:
@@ -251,50 +250,54 @@ async def main():
 
 ⚠️ MG1 ENABLED
 
-🔥 REAL MARKET CHECK
+🔥 REAL MARKET
 """
 
-            # ==============================
+            # ==================================
             # SEND SIGNAL
-            # ==============================
+            # ==================================
 
             await send_message(signal_text)
 
             total_signal += 1
 
-            # ==============================
+            # ==================================
             # WAIT ENTRY TIME
-            # ==============================
+            # ==================================
 
-            wait_entry = (entry_time - datetime.now(IST)).total_seconds()
+            entry_wait = (
+                entry_time - datetime.now(IST)
+            ).total_seconds()
 
-            if wait_entry > 0:
+            if entry_wait > 0:
 
-                await asyncio.sleep(wait_entry)
+                await asyncio.sleep(entry_wait)
 
             entry_price = get_price(pair)
 
             if entry_price is None:
                 continue
 
-            # ==============================
+            # ==================================
             # WAIT EXIT TIME
-            # ==============================
+            # ==================================
 
-            wait_exit = (exit_time - datetime.now(IST)).total_seconds()
+            exit_wait = (
+                exit_time - datetime.now(IST)
+            ).total_seconds()
 
-            if wait_exit > 0:
+            if exit_wait > 0:
 
-                await asyncio.sleep(wait_exit)
+                await asyncio.sleep(exit_wait)
 
             exit_price = get_price(pair)
 
             if exit_price is None:
                 continue
 
-            # ==============================
+            # ==================================
             # CHECK RESULT
-            # ==============================
+            # ==================================
 
             result = check_result(
                 signal,
@@ -304,9 +307,9 @@ async def main():
 
             mg1_used = False
 
-            # ==============================
+            # ==================================
             # MG1
-            # ==============================
+            # ==================================
 
             if result == "LOSS":
 
@@ -314,19 +317,19 @@ async def main():
 
                 await asyncio.sleep(60)
 
-                mg_exit_price = get_price(pair)
+                mg_price = get_price(pair)
 
-                if mg_exit_price:
+                if mg_price:
 
                     result = check_result(
                         signal,
                         entry_price,
-                        mg_exit_price
+                        mg_price
                     )
 
-            # ==============================
-            # RESULT MESSAGE
-            # ==============================
+            # ==================================
+            # RESULT FORMAT
+            # ==================================
 
             if result == "WIN":
 
@@ -388,15 +391,15 @@ async def main():
 
                 result_text += "\n⚠️ MG1 USED"
 
-            # ==============================
+            # ==================================
             # SEND RESULT
-            # ==============================
+            # ==================================
 
             await send_message(result_text)
 
-            # ==============================
+            # ==================================
             # WINRATE
-            # ==============================
+            # ==================================
 
             if total_signal > 0:
 
@@ -409,11 +412,11 @@ async def main():
 
                 winrate = 0
 
-            # ==============================
+            # ==================================
             # SUMMARY
-            # ==============================
+            # ==================================
 
-            summary_text = f"""
+            summary = f"""
 📊 <b>DAILY SUMMARY</b>
 
 📅 Date: {datetime.now(IST).strftime('%d/%m/%Y')}
@@ -427,13 +430,13 @@ async def main():
 📈 Winrate: {winrate}%
 """
 
-            await send_message(summary_text)
+            await send_message(summary)
 
-            # ==============================
+            print("WAITING NEXT SIGNAL")
+
+            # ==================================
             # BREAK AFTER TRADE
-            # ==============================
-
-            print("WAITING NEXT SETUP")
+            # ==================================
 
             await asyncio.sleep(60)
 
