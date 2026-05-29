@@ -6,7 +6,7 @@ import pytz
 from telegram import Bot
 
 # =========================================
-# CONFIG
+# TELEGRAM + API CONFIG
 # =========================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -16,7 +16,7 @@ API_KEY = os.getenv("API_KEY")
 bot = Bot(token=BOT_TOKEN)
 
 # =========================================
-# INDIAN TIMEZONE
+# TIMEZONE
 # =========================================
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -37,7 +37,7 @@ PAIRS = [
 ]
 
 # =========================================
-# DAILY SUMMARY
+# SUMMARY VARIABLES
 # =========================================
 
 total_signal = 0
@@ -45,7 +45,25 @@ total_win = 0
 total_loss = 0
 
 # =========================================
-# GET REAL MARKET CANDLES
+# SEND TELEGRAM MESSAGE
+# =========================================
+
+def send_message(text):
+
+    try:
+
+        bot.send_message(
+            chat_id=CHAT_ID,
+            text=text,
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+
+        print("TELEGRAM ERROR:", e)
+
+# =========================================
+# GET REAL MARKET DATA
 # =========================================
 
 def get_candles(pair):
@@ -70,9 +88,7 @@ def get_candles(pair):
 
             return None
 
-        candles = data["values"]
-
-        return candles
+        return data["values"]
 
     except Exception as e:
 
@@ -81,7 +97,7 @@ def get_candles(pair):
         return None
 
 # =========================================
-# SUPPORT RESISTANCE LOGIC
+# SIGNAL LOGIC
 # =========================================
 
 def generate_signal(candles):
@@ -94,35 +110,34 @@ def generate_signal(candles):
 
         current = closes[0]
 
-        resistance = max(highs[1:])
-        support = min(lows[1:])
+        resistance = max(highs[1:5])
+
+        support = min(lows[1:5])
 
         momentum = closes[0] - closes[3]
 
-        # =====================================
-        # STRONG BUY
-        # =====================================
+        # BUY SIGNAL
 
         if current > resistance and momentum > 0:
 
             return "BUY"
 
-        # =====================================
-        # STRONG SELL
-        # =====================================
+        # SELL SIGNAL
 
-        elif current < support and momentum < 0:
+        if current < support and momentum < 0:
 
             return "SELL"
 
         return None
 
-    except:
+    except Exception as e:
+
+        print("SIGNAL ERROR:", e)
 
         return None
 
 # =========================================
-# CHECK RESULT
+# RESULT CHECK
 # =========================================
 
 def check_result(signal, entry, close):
@@ -144,24 +159,6 @@ def check_result(signal, entry, close):
             return "LOSS"
 
 # =========================================
-# SEND TELEGRAM MESSAGE
-# =========================================
-
-def send_message(text):
-
-    try:
-
-        bot.send_message(
-            chat_id=CHAT_ID,
-            text=text,
-            parse_mode="HTML"
-        )
-
-    except Exception as e:
-
-        print("TELEGRAM ERROR:", e)
-
-# =========================================
 # MAIN BOT
 # =========================================
 
@@ -170,6 +167,8 @@ print("LIVE FOREX BOT STARTED")
 while True:
 
     try:
+
+        signal_found = False
 
         for pair in PAIRS:
 
@@ -183,35 +182,33 @@ while True:
             if signal is None:
                 continue
 
-            global total_signal
-            global total_win
-            global total_loss
+            signal_found = True
 
             now = datetime.now(IST)
 
             signal_time = now.strftime("%H:%M:%S")
 
             # =====================================
-            # ENTRY AFTER 1 MINUTE
+            # ENTRY TIME
             # =====================================
 
-            entry_time_dt = now + timedelta(minutes=1)
+            entry_dt = now + timedelta(minutes=1)
 
-            exit_time_dt = entry_time_dt + timedelta(minutes=1)
+            exit_dt = entry_dt + timedelta(minutes=1)
 
-            entry_time = entry_time_dt.strftime("%H:%M:%S")
+            entry_time = entry_dt.strftime("%H:%M:%S")
 
-            exit_time = exit_time_dt.strftime("%H:%M:%S")
+            exit_time = exit_dt.strftime("%H:%M:%S")
 
             pair_name = pair.replace("/", "")
 
             # =====================================
-            # BUY FORMAT
+            # SIGNAL MESSAGE
             # =====================================
 
             if signal == "BUY":
 
-                signal_text = f"""
+                message = f"""
 🚨 <b>LIVE FOREX SIGNAL</b>
 
 💱 <b>{pair_name}-FX</b>
@@ -233,13 +230,9 @@ while True:
 🔥 REAL MARKET
 """
 
-            # =====================================
-            # SELL FORMAT
-            # =====================================
-
             else:
 
-                signal_text = f"""
+                message = f"""
 🚨 <b>LIVE FOREX SIGNAL</b>
 
 💱 <b>{pair_name}-FX</b>
@@ -261,7 +254,7 @@ while True:
 🔥 REAL MARKET
 """
 
-            send_message(signal_text)
+            send_message(message)
 
             total_signal += 1
 
@@ -271,25 +264,25 @@ while True:
 
             time.sleep(60)
 
-            entry_candles = get_candles(pair)
+            entry_candle = get_candles(pair)
 
-            if entry_candles is None:
+            if entry_candle is None:
                 continue
 
-            entry_price = float(entry_candles[0]["close"])
+            entry_price = float(entry_candle[0]["close"])
 
             # =====================================
-            # WAIT FOR CANDLE CLOSE
+            # WAIT FOR EXIT
             # =====================================
 
             time.sleep(60)
 
-            result_candles = get_candles(pair)
+            result_candle = get_candles(pair)
 
-            if result_candles is None:
+            if result_candle is None:
                 continue
 
-            close_price = float(result_candles[0]["close"])
+            close_price = float(result_candle[0]["close"])
 
             result = check_result(
                 signal,
@@ -307,11 +300,11 @@ while True:
 
                 time.sleep(60)
 
-                mg_candles = get_candles(pair)
+                mg_candle = get_candles(pair)
 
-                if mg_candles:
+                if mg_candle:
 
-                    mg_close = float(mg_candles[0]["close"])
+                    mg_close = float(mg_candle[0]["close"])
 
                     mg_result = check_result(
                         signal,
@@ -324,13 +317,15 @@ while True:
                         result = "WIN (MG1)"
 
             # =====================================
-            # SUMMARY COUNTS
+            # SUMMARY
             # =====================================
 
             if "WIN" in result:
+
                 total_win += 1
 
             else:
+
                 total_loss += 1
 
             # =====================================
@@ -339,42 +334,38 @@ while True:
 
             if signal == "BUY":
 
-                result_text = f"""
+                result_msg = f"""
 📢 <b>TRADE RESULT</b>
 
 💱 <b>{pair_name}-FX</b>
 
 🟢 <b>BUY ⬆️</b>
 
-{ '✅ <b>' + result + '</b>' if 'WIN' in result else '❌ <b>LOSS</b>' }
+{"✅ <b>" + result + "</b>" if "WIN" in result else "❌ <b>LOSS</b>"}
 """
 
             else:
 
-                result_text = f"""
+                result_msg = f"""
 📢 <b>TRADE RESULT</b>
 
 💱 <b>{pair_name}-FX</b>
 
 🔴 <b>SELL ⬇️</b>
 
-{ '✅ <b>' + result + '</b>' if 'WIN' in result else '❌ <b>LOSS</b>' }
+{"✅ <b>" + result + "</b>" if "WIN" in result else "❌ <b>LOSS</b>"}
 """
 
-            send_message(result_text)
+            send_message(result_msg)
 
             # =====================================
             # WINRATE
             # =====================================
 
-            winrate = 0
-
-            if total_signal > 0:
-
-                winrate = round(
-                    (total_win / total_signal) * 100,
-                    2
-                )
+            winrate = round(
+                (total_win / total_signal) * 100,
+                2
+            )
 
             today = datetime.now(IST).strftime("%d/%m/%Y")
 
@@ -401,10 +392,14 @@ while True:
             time.sleep(60)
 
         # =========================================
-        # LOOP DELAY
+        # NO SPAM
         # =========================================
 
-        time.sleep(15)
+        if not signal_found:
+
+            print("No strong setup found")
+
+            time.sleep(20)
 
     except Exception as e:
 
