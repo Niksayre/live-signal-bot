@@ -1,5 +1,4 @@
 import requests
-import pandas as pd
 import asyncio
 import random
 from datetime import datetime, timedelta
@@ -26,19 +25,17 @@ IST = pytz.timezone("Asia/Kolkata")
 # PAIRS
 # =========================
 
-PAIRS = [
+pairs = [
     "EURUSD",
     "GBPUSD",
     "USDJPY",
     "EURJPY",
-    "GBPJPY",
     "AUDUSD",
     "USDCAD",
-    "USDCHF"
 ]
 
 # =========================
-# SUMMARY
+# STATS
 # =========================
 
 total_signal = 0
@@ -48,52 +45,27 @@ total_loss = 0
 last_trade_time = None
 
 # =========================
-# GET REAL MARKET DATA
+# GET MARKET PRICE
 # =========================
 
-def get_candles(pair):
-
-    url = f"https://api.exchangerate.host/live?source=USD"
+def get_price(pair):
 
     try:
+
+        symbol = pair + "=X"
+
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d"
+
         r = requests.get(url, timeout=10)
+
         data = r.json()
 
-        price = random.uniform(1.0000, 2.0000)
+        close_prices = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
 
-        candles = []
-
-        for i in range(50):
-
-            open_price = price + random.uniform(-0.0030, 0.0030)
-            close_price = open_price + random.uniform(-0.0030, 0.0030)
-            high_price = max(open_price, close_price) + random.uniform(0.0001, 0.0010)
-            low_price = min(open_price, close_price) - random.uniform(0.0001, 0.0010)
-
-            candles.append({
-                "open": open_price,
-                "close": close_price,
-                "high": high_price,
-                "low": low_price
-            })
-
-            price = close_price
-
-        return pd.DataFrame(candles)
+        return close_prices[-5:]
 
     except:
         return None
-
-# =========================
-# SUPPORT RESISTANCE
-# =========================
-
-def support_resistance(df):
-
-    support = df["low"].tail(20).min()
-    resistance = df["high"].tail(20).max()
-
-    return support, resistance
 
 # =========================
 # SIGNAL LOGIC
@@ -103,72 +75,109 @@ def generate_signal():
 
     global last_trade_time
 
+    pair = random.choice(pairs)
+
+    prices = get_price(pair)
+
+    if not prices:
+        return None
+
+    if None in prices:
+        return None
+
+    diff = prices[-1] - prices[-2]
+
+    if abs(diff) < 0.0001:
+        return None
+
+    direction = "BUY" if diff > 0 else "SELL"
+
     now = datetime.now(IST)
 
     if last_trade_time:
-        diff = (now - last_trade_time).seconds
-        if diff < 180:
+        if (now - last_trade_time).seconds < 120:
             return None
 
-    pair = random.choice(PAIRS)
-
-    df = get_candles(pair)
-
-    if df is None:
-        return None
-
-    support, resistance = support_resistance(df)
-
-    current = df.iloc[-1]["close"]
-
-    signal = None
-
-    if current <= support * 1.001:
-        signal = "BUY"
-
-    elif current >= resistance * 0.999:
-        signal = "SELL"
-
-    if signal is None:
-        return None
+    signal_time = now
 
     entry_time = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
-    exit_time = entry_time + timedelta(minutes=1)
+
+    expiry_time = entry_time + timedelta(minutes=1)
 
     last_trade_time = now
 
     return {
         "pair": pair,
-        "signal": signal,
+        "direction": direction,
+        "signal_time": signal_time,
         "entry_time": entry_time,
-        "exit_time": exit_time
+        "expiry_time": expiry_time
     }
+
+# =========================
+# CHECK RESULT
+# =========================
+
+def check_result(pair, direction):
+
+    prices = get_price(pair)
+
+    if not prices:
+        return "LOSS"
+
+    open_price = prices[-2]
+    close_price = prices[-1]
+
+    if direction == "BUY":
+
+        if close_price > open_price:
+            return "WIN"
+        else:
+            return "LOSS"
+
+    else:
+
+        if close_price < open_price:
+            return "WIN"
+        else:
+            return "LOSS"
 
 # =========================
 # SEND SIGNAL
 # =========================
 
-async def send_signal(data):
+async def send_signal(signal):
 
-    pair = data["pair"]
-    signal = data["signal"]
+    pair = signal["pair"]
 
-    signal_emoji = "🟢 BUY ⬆️ UP" if signal == "BUY" else "🔴 SELL ⬇️ DOWN"
+    direction = signal["direction"]
+
+    signal_time = signal["signal_time"].strftime("%H:%M:%S")
+
+    entry_time = signal["entry_time"].strftime("%H:%M:%S")
+
+    expiry_time = signal["expiry_time"].strftime("%H:%M:%S")
+
+    arrow = "⬆️" if direction == "BUY" else "⬇️"
+
+    color = "🟢" if direction == "BUY" else "🔴"
+
+    tf = "M1"
 
     msg = f"""
 🚨 <b>LIVE FOREX SIGNAL</b>
 
-💷 <b>{pair}-FX</b>
+💱 <b>{pair}-FX</b>
 
-🕒 Signal Time ⏰ {datetime.now(IST).strftime('%H:%M:%S')}
+🕒 Signal Time: {signal_time}
 
-⏳ Entry Time ⏰ {data['entry_time'].strftime('%H:%M:%S')}
+⏳ Entry Time: {entry_time}
 
-⌛ Exit Time ⏰ {data['exit_time'].strftime('%H:%M:%S')}
+⌛ Exit Time: {expiry_time}
 
-📊 Timeframe: M1
+📊 Timeframe: {tf}
 
-{signal_emoji}
+{color} <b>{direction}</b> {arrow}
 
 ⚠️ MG1 ENABLED
 
@@ -182,54 +191,54 @@ async def send_signal(data):
     )
 
 # =========================
-# CHECK RESULT
+# SEND RESULT
 # =========================
 
-async def check_result(data):
+async def send_result(signal, result):
 
     global total_signal
     global total_win
     global total_loss
 
-    await asyncio.sleep(120)
+    pair = signal["pair"]
 
-    result = random.choice(["WIN", "LOSS"])
+    direction = signal["direction"]
 
-    mg1_used = False
+    arrow = "⬆️" if direction == "BUY" else "⬇️"
 
-    if result == "LOSS":
-
-        mg1_used = True
-
-        await asyncio.sleep(60)
-
-        result = random.choice(["WIN", "LOSS"])
-
-    if result == "WIN":
-        total_win += 1
-    else:
-        total_loss += 1
+    color = "🟢" if direction == "BUY" else "🔴"
 
     total_signal += 1
 
-    result_icon = "✅ WIN" if result == "WIN" else "❌ LOSS"
+    if result == "WIN":
+        total_win += 1
+        result_icon = "✅ WIN"
+    else:
+        total_loss += 1
+        result_icon = "❌ LOSS"
 
-    mg_text = " (MG1 WIN)" if mg1_used and result == "WIN" else ""
+    date = datetime.now(IST).strftime("%d/%m/%Y")
 
-    signal_emoji = (
-        "🟢 BUY ⬆️ UP"
-        if data["signal"] == "BUY"
-        else "🔴 SELL ⬇️ DOWN"
-    )
+    summary = f"""
+📊 <b>SUMMARY</b>
+
+📅 Date: {date}
+
+🎯 Total Signal: {total_signal}
+
+✅ Total Win: {total_win}
+
+❌ Total Loss: {total_loss}
+"""
 
     msg = f"""
 📢 <b>TRADE RESULT</b>
 
-💷 <b>{data['pair']}-FX</b>
+💱 <b>{pair}-FX</b>
 
-{signal_emoji}
+{color} <b>{direction}</b> {arrow}
 
-{result_icon}{mg_text}
+{result_icon}
 """
 
     await bot.send_message(
@@ -237,25 +246,6 @@ async def check_result(data):
         text=msg,
         parse_mode="HTML"
     )
-
-    winrate = 0
-
-    if total_signal > 0:
-        winrate = round((total_win / total_signal) * 100, 2)
-
-    summary = f"""
-📊 <b>SUMMARY</b>
-
-📅 Date: {datetime.now(IST).strftime('%d/%m/%Y')}
-
-🎯 Total Signal: {total_signal}
-
-✅ Total Win: {total_win}
-
-❌ Total Loss: {total_loss}
-
-🏆 Winrate: {winrate}%
-"""
 
     await bot.send_message(
         chat_id=CHAT_ID,
@@ -281,9 +271,27 @@ async def main():
 
                 await send_signal(signal)
 
-                await check_result(signal)
+                now = datetime.now(IST)
 
-            await asyncio.sleep(30)
+                wait_seconds = (
+                    signal["expiry_time"] - now
+                ).total_seconds()
+
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+
+                result = check_result(
+                    signal["pair"],
+                    signal["direction"]
+                )
+
+                await send_result(signal, result)
+
+                await asyncio.sleep(60)
+
+            else:
+
+                await asyncio.sleep(20)
 
         except Exception as e:
 
