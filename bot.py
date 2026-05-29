@@ -129,10 +129,10 @@ def check_result(signal, entry, close):
 # SEND TELEGRAM MESSAGE
 # =========================
 
-async def send_message(text):
+async def await send_message(text):
 
     try:
-        await bot.send_message(
+        await bot.await send_message(
             chat_id=CHAT_ID,
             text=text,
             parse_mode="HTML"
@@ -209,7 +209,7 @@ async def process_trade(pair):
 🔥 REAL MARKET DATA
 """
 
-    await send_message(signal_message)
+    await await send_message(signal_message)
 
     # =========================
     # WAIT FOR ENTRY
@@ -292,7 +292,7 @@ async def process_trade(pair):
 {result_text}
 """
 
-    await send_message(result_message)
+    await await send_message(result_message)
 
     # =========================
     # WINRATE
@@ -321,7 +321,7 @@ async def process_trade(pair):
 📈 Winrate: {winrate}%
 """
 
-    await send_message(summary)
+    await await send_message(summary)
 
     # =========================
     # 1 MIN BREAK
