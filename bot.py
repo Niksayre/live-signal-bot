@@ -1,41 +1,35 @@
 import requests
 import asyncio
-import random
 from datetime import datetime, timedelta
 import pytz
-
 from telegram import Bot
 
 # =========================
-# TELEGRAM SETTINGS
+# TELEGRAM + API
 # =========================
 
 BOT_TOKEN = "8926681279:AAEa-0EQpSoCMTbldp0GE03LNAs5wBNwKqY"
 CHAT_ID = "8241640506"
+API_KEY = "edf95432c6e84ca98d8f2a8c900e7e05"
 
 bot = Bot(token=BOT_TOKEN)
 
 # =========================
-# API SETTINGS
+# INDIAN TIME
 # =========================
 
-API_KEY = "edf95432c6e84ca98d8f2a8c900e7e05"
+IST = pytz.timezone("Asia/Kolkata")
+
+# =========================
+# PAIRS
+# =========================
 
 pairs = [
     "EUR/USD",
     "GBP/USD",
     "USD/JPY",
-    "AUD/USD",
-    "USD/CAD",
-    "EUR/JPY",
-    "GBP/JPY"
+    "AUD/USD"
 ]
-
-# =========================
-# INDIA TIME
-# =========================
-
-india = pytz.timezone("Asia/Kolkata")
 
 # =========================
 # SUMMARY
@@ -46,64 +40,90 @@ total_win = 0
 total_loss = 0
 
 # =========================
-# GET REAL MARKET PRICE
+# FETCH REAL MARKET DATA
 # =========================
 
-def get_price(symbol):
+def get_candles(pair):
 
-    url = (
-        f"https://api.twelvedata.com/time_series"
-        f"?symbol={symbol}"
-        f"&interval=1min"
-        f"&outputsize=3"
-        f"&apikey={API_KEY}"
-    )
+    url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval=1min&outputsize=10&apikey={API_KEY}"
 
     try:
-
         response = requests.get(url, timeout=10)
-
         data = response.json()
 
-        values = data.get("values")
-
-        if not values:
+        if "values" not in data:
+            print("API ERROR:", data)
             return None
 
-        return values
+        return data["values"]
 
     except Exception as e:
         print("PRICE ERROR:", e)
         return None
 
 # =========================
-# STRONG SETUP CHECK
+# SIGNAL LOGIC
 # =========================
 
 def generate_signal(candles):
 
-    close1 = float(candles[0]["close"])
-    open1 = float(candles[0]["open"])
+    try:
+        close1 = float(candles[0]["close"])
+        open1 = float(candles[0]["open"])
 
-    close2 = float(candles[1]["close"])
-    open2 = float(candles[1]["open"])
+        close2 = float(candles[1]["close"])
+        open2 = float(candles[1]["open"])
 
-    body1 = abs(close1 - open1)
-    body2 = abs(close2 - open2)
+        high1 = float(candles[0]["high"])
+        low1 = float(candles[0]["low"])
 
-    # avoid weak candles
-    if body1 < 0.00010:
+        body = abs(close1 - open1)
+        range_candle = abs(high1 - low1)
+
+        # Strong candle filter
+        if range_candle == 0:
+            return None
+
+        strength = body / range_candle
+
+        # Need strong candle
+        if strength < 0.65:
+            return None
+
+        # BUY
+        if close1 > open1 and close2 > open2:
+            return "BUY"
+
+        # SELL
+        if close1 < open1 and close2 < open2:
+            return "SELL"
+
         return None
 
-    # BUY setup
-    if close1 > open1 and close2 > open2:
-        return "BUY"
+    except:
+        return None
 
-    # SELL setup
-    if close1 < open1 and close2 < open2:
-        return "SELL"
+# =========================
+# CHECK RESULT
+# =========================
 
-    return None
+def check_result(signal, entry, close):
+
+    if signal == "BUY":
+
+        if close > entry:
+            return "WIN"
+
+        else:
+            return "LOSS"
+
+    else:
+
+        if close < entry:
+            return "WIN"
+
+        else:
+            return "LOSS"
 
 # =========================
 # SEND TELEGRAM MESSAGE
@@ -112,7 +132,6 @@ def generate_signal(candles):
 async def send_message(text):
 
     try:
-
         await bot.send_message(
             chat_id=CHAT_ID,
             text=text,
@@ -123,177 +142,218 @@ async def send_message(text):
         print("TELEGRAM ERROR:", e)
 
 # =========================
-# TRADE RESULT CHECK
+# TRADE SYSTEM
 # =========================
 
-async def check_result(pair, signal, entry_price):
+async def process_trade(pair):
 
+    global total_signal
     global total_win
     global total_loss
 
-    # wait candle close
-    await asyncio.sleep(65)
-
-    candles = get_price(pair)
+    candles = get_candles(pair)
 
     if candles is None:
         return
 
-    close_price = float(candles[0]["close"])
+    signal = generate_signal(candles)
 
-    result = "LOSS"
+    if signal is None:
+        print("No strong setup found")
+        return
+
+    india_time = datetime.now(IST)
+
+    signal_time = india_time.strftime("%H:%M:%S")
+
+    entry_time_dt = india_time + timedelta(minutes=1)
+    exit_time_dt = entry_time_dt + timedelta(minutes=1)
+
+    entry_time = entry_time_dt.strftime("%H:%M:%S")
+    exit_time = exit_time_dt.strftime("%H:%M:%S")
+
+    total_signal += 1
+
+    direction = ""
+    color = ""
 
     if signal == "BUY":
+        direction = "🟢 BUY ⬆️ UP"
+        color = "🟢"
 
-        if close_price > entry_price:
-            result = "WIN"
+    else:
+        direction = "🔴 SELL ⬇️ DOWN"
+        color = "🔴"
 
-    if signal == "SELL":
+    # =========================
+    # SEND SIGNAL
+    # =========================
 
-        if close_price < entry_price:
-            result = "WIN"
+    signal_message = f"""
+🚨 <b>LIVE FOREX SIGNAL</b>
 
-    # ======================
+💱 <b>{pair}</b>
+
+🕒 Signal Time: {signal_time}
+
+⏳ Entry Time: {entry_time}
+
+⌛ Exit Time: {exit_time}
+
+📊 Timeframe: M1
+
+{direction}
+
+⚠️ MG1 ENABLED
+
+🔥 REAL MARKET DATA
+"""
+
+    await send_message(signal_message)
+
+    # =========================
+    # WAIT FOR ENTRY
+    # =========================
+
+    await asyncio.sleep(60)
+
+    entry_candles = get_candles(pair)
+
+    if entry_candles is None:
+        return
+
+    entry_price = float(entry_candles[0]["close"])
+
+    # =========================
+    # WAIT FOR EXIT
+    # =========================
+
+    await asyncio.sleep(60)
+
+    exit_candles = get_candles(pair)
+
+    if exit_candles is None:
+        return
+
+    exit_price = float(exit_candles[0]["close"])
+
+    result = check_result(signal, entry_price, exit_price)
+
+    mg_used = False
+
+    # =========================
     # MG1
-    # ======================
+    # =========================
 
     if result == "LOSS":
 
-        await asyncio.sleep(65)
+        mg_used = True
 
-        candles = get_price(pair)
+        await asyncio.sleep(60)
 
-        if candles:
+        mg_candles = get_candles(pair)
 
-            mg_close = float(candles[0]["close"])
+        if mg_candles is None:
+            return
 
-            if signal == "BUY" and mg_close > close_price:
-                result = "WIN MG1"
+        mg_close = float(mg_candles[0]["close"])
 
-            elif signal == "SELL" and mg_close < close_price:
-                result = "WIN MG1"
+        result = check_result(signal, exit_price, mg_close)
 
-    # ======================
-    # UPDATE SUMMARY
-    # ======================
+    # =========================
+    # FINAL RESULT
+    # =========================
 
-    if "WIN" in result:
+    if result == "WIN":
+
         total_win += 1
-        emoji = "✅"
+
+        if mg_used:
+            result_text = "✅ WIN AFTER MG1"
+        else:
+            result_text = "✅ DIRECT WIN"
 
     else:
+
         total_loss += 1
-        emoji = "❌"
+        result_text = "❌ LOSS"
 
-    now = datetime.now(india)
+    # =========================
+    # SEND RESULT
+    # =========================
 
-    summary = f"""
+    result_message = f"""
 📢 <b>TRADE RESULT</b>
 
 💱 <b>{pair}</b>
 
-{'🟢 <b>BUY ⬆️ UP</b>' if signal == 'BUY' else '🔴 <b>SELL ⬇️ DOWN</b>'}
+{direction}
 
-{emoji} <b>{result}</b>
+{result_text}
+"""
 
-━━━━━━━━━━━━━━━
+    await send_message(result_message)
 
+    # =========================
+    # WINRATE
+    # =========================
+
+    if total_signal > 0:
+        winrate = round((total_win / total_signal) * 100, 2)
+    else:
+        winrate = 0
+
+    # =========================
+    # SUMMARY
+    # =========================
+
+    summary = f"""
 📊 <b>SUMMARY</b>
 
-📅 Date: {now.strftime('%d/%m/%Y')}
+📅 Date: {india_time.strftime("%d/%m/%Y")}
 
 🎯 Total Signal: {total_signal}
 
 ✅ Total Win: {total_win}
 
 ❌ Total Loss: {total_loss}
+
+📈 Winrate: {winrate}%
 """
 
     await send_message(summary)
 
+    # =========================
+    # 1 MIN BREAK
+    # =========================
+
+    await asyncio.sleep(60)
+
 # =========================
-# MAIN BOT
+# MAIN LOOP
 # =========================
 
-async def run_bot():
-
-    global total_signal
+async def main():
 
     print("LIVE FOREX BOT STARTED")
 
     while True:
 
-        try:
+        for pair in pairs:
 
-            now = datetime.now(india)
+            try:
+                await process_trade(pair)
 
-            second = now.second
+                # API LIMIT PROTECTION
+                await asyncio.sleep(10)
 
-            # signal only near candle close
-            if second >= 50:
+            except Exception as e:
+                print("MAIN ERROR:", e)
 
-                pair = random.choice(pairs)
-
-                candles = get_price(pair)
-
-                if candles:
-
-                    signal = generate_signal(candles)
-
-                    if signal:
-
-                        total_signal += 1
-
-                        entry_time = (
-                            now + timedelta(minutes=1)
-                        ).replace(second=0)
-
-                        exit_time = entry_time + timedelta(minutes=1)
-
-                        entry_price = float(candles[0]["close"])
-
-                        signal_text = f"""
-🚨 <b>LIVE FOREX SIGNAL</b>
-
-💱 <b>{pair}</b>
-
-🕒 Signal Time: {now.strftime('%H:%M:%S')}
-
-⏳ Entry Time: {entry_time.strftime('%H:%M:%S')}
-
-⌛ Exit Time: {exit_time.strftime('%H:%M:%S')}
-
-📊 Timeframe: M1
-
-{'🟢 <b>BUY ⬆️ UP</b>' if signal == 'BUY' else '🔴 <b>SELL ⬇️ DOWN</b>'}
-
-⚠️ MG1 ENABLED
-
-🔥 REAL MARKET
-"""
-
-                        await send_message(signal_text)
-
-                        # wait until entry candle close
-                        await check_result(
-                            pair,
-                            signal,
-                            entry_price
-                        )
-
-                        # 1 minute cooldown
-                        await asyncio.sleep(60)
-
-            await asyncio.sleep(1)
-
-        except Exception as e:
-
-            print("MAIN ERROR:", e)
-
-            await asyncio.sleep(10)
+        await asyncio.sleep(20)
 
 # =========================
 # START
 # =========================
 
-asyncio.run(run_bot())
+asyncio.run(main())
