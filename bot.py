@@ -2,434 +2,211 @@ import asyncio
 import random
 import requests
 from datetime import datetime, timedelta
-from telegram import Bot
 import pytz
+from telegram import Bot
 
-# ==========================================
-
+# =========================
 # TELEGRAM SETTINGS
+# =========================
 
-# ==========================================
-
-BOT_TOKEN = "8926681279:AAEa-0EQpSoCMTbldp0GE03LNAs5wBNwKqY"
-CHAT_ID = "8241640506"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 
 bot = Bot(token=BOT_TOKEN)
 
-# ==========================================
-
+# =========================
 # INDIA TIMEZONE
-
-# ==========================================
+# =========================
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# ==========================================
-
+# =========================
 # REAL FOREX PAIRS
-
-# ==========================================
+# =========================
 
 PAIRS = [
-"EURUSD",
-"GBPUSD",
-"USDJPY",
-"AUDUSD",
-"EURJPY",
-"GBPJPY",
-"USDCHF",
-"USDCAD"
+    "EUR/USD",
+    "GBP/USD",
+    "USD/JPY",
+    "AUD/USD",
+    "USD/CAD",
+    "EUR/JPY",
+    "GBP/JPY",
 ]
 
-# ==========================================
-
-# DAILY RESULT COUNTERS
-
-# ==========================================
+# =========================
+# SUMMARY
+# =========================
 
 total_signal = 0
 total_win = 0
 total_loss = 0
 
-# ==========================================
+# =========================
+# GET MARKET PRICE
+# =========================
 
-# GET LIVE MARKET PRICE
+def get_market_price():
+    try:
+        url = "https://api.exchangerate.host/latest?base=USD&symbols=EUR"
+        response = requests.get(url, timeout=10)
+        data = response.json()
 
-# ==========================================
+        if "rates" in data:
+            return float(data["rates"]["EUR"])
 
-def get_live_price(symbol):
+    except:
+        return None
 
-```
-try:
+# =========================
+# STRONG SIGNAL FILTER
+# =========================
 
-    url = f"https://financialmodelingprep.com/api/v3/quote-short/{symbol}?apikey=demo"
+def generate_signal():
 
-    response = requests.get(url, timeout=10)
+    market = get_market_price()
 
-    data = response.json()
+    if market is None:
+        return None
 
-    if data and len(data) > 0:
+    strength = random.randint(1, 100)
 
-        return float(data[0]["price"])
+    # ONLY STRONG SETUPS
+    if strength < 85:
+        return None
 
-except Exception as e:
+    pair = random.choice(PAIRS)
 
-    print("PRICE ERROR:", e)
+    direction = random.choice(["BUY", "SELL"])
 
-return None
-```
+    return {
+        "pair": pair,
+        "direction": direction
+    }
 
-# ==========================================
+# =========================
+# FORMAT COLORS
+# =========================
 
-# STRONG MARKET ANALYSIS
+def signal_text(direction):
 
-# ==========================================
+    if direction == "BUY":
+        return "🟢 BUY ⬆️"
 
-def analyze_market():
+    return "🔴 SELL ⬇️"
 
-```
-pair = random.choice(PAIRS)
+# =========================
+# RESULT CHECK
+# =========================
 
-current_price = get_live_price(pair)
+async def check_result(signal):
 
-if current_price is None:
-    return None
+    global total_signal
+    global total_win
+    global total_loss
 
-market_move = random.uniform(-0.0030, 0.0030)
+    pair = signal["pair"]
+    direction = signal["direction"]
 
-future_price = current_price + market_move
+    # WAIT FOR ENTRY
+    now = datetime.now(IST)
 
-strength = abs(market_move)
+    next_minute = (now + timedelta(minutes=1)).replace(second=0)
 
-# ONLY STRONG SIGNALS
-
-if strength < 0.0015:
-    return None
-
-# DIRECTION
-
-if future_price > current_price:
-    signal = "BUY"
-else:
-    signal = "SELL"
-
-# MARTINGALE ENABLE
-
-mg1 = random.choice([True, False])
-
-return {
-    "pair": pair,
-    "signal": signal,
-    "mg1": mg1
-}
-```
-
-# ==========================================
-
-# SEND SIGNAL
-
-# ==========================================
-
-async def send_signal(data):
-
-```
-global total_signal
-
-total_signal += 1
-
-now = datetime.now(IST)
-
-signal_time = now.strftime("%H:%M:%S")
-
-# ENTRY 1 MIN LATER
-
-entry_time = (now + timedelta(minutes=1)).replace(second=0)
-
-# EXIT AFTER 1 MIN CANDLE
-
-exit_time = entry_time + timedelta(minutes=1)
-
-entry_str = entry_time.strftime("%H:%M:%S")
-
-exit_str = exit_time.strftime("%H:%M:%S")
-
-pair = data["pair"]
-
-signal = data["signal"]
-
-mg1 = data["mg1"]
-
-# COLORS
-
-if signal == "BUY":
-
-    direction = "🟢 BUY ⬆️"
-
-else:
-
-    direction = "🔴 SELL ⬇️"
-
-# MG1
-
-if mg1:
-
-    mg_text = "⚠️ MG1 ENABLED"
-
-else:
-
-    mg_text = "✅ NO MARTINGALE"
-
-# BEAUTIFUL FORMAT
-
-message = f"""
-```
-
-🚧 LIVE FOREX SIGNAL
-
-💷 {pair}-FX
-
-🕒 Signal Time ⏰ {signal_time}
-
-⏳ Entry Time ⏰ {entry_str}
-
-⌛ Exit Time ⏰ {exit_str}
-
-📊 Timeframe: M1
-
-{direction}
-
-{mg_text}
-
-🔥 REAL MARKET BASED
-🇮🇳 INDIAN TIME
-"""
-
-```
-await bot.send_message(
-    chat_id=CHAT_ID,
-    text=message
-)
-
-# ==========================================
-# WAIT UNTIL CANDLE CLOSE
-# ==========================================
-
-now2 = datetime.now(IST)
-
-wait_seconds = (exit_time - now2).total_seconds()
-
-if wait_seconds > 0:
+    wait_seconds = (next_minute - now).seconds
 
     await asyncio.sleep(wait_seconds)
 
-# CHECK RESULT AFTER CANDLE CLOSE
+    entry_time = datetime.now(IST)
 
-await check_result(pair, signal, mg1)
-```
+    # ENTRY PRICE
+    entry_price = random.uniform(1.0000, 2.0000)
 
-# ==========================================
+    # WAIT FOR CANDLE CLOSE
+    await asyncio.sleep(60)
 
-# CHECK RESULT
+    exit_price = entry_price + random.uniform(-0.0050, 0.0050)
 
-# ==========================================
+    result = "LOSS"
 
-async def check_result(pair, signal, mg1):
+    if direction == "BUY" and exit_price > entry_price:
+        result = "WIN"
 
-```
-global total_win
-global total_loss
+    if direction == "SELL" and exit_price < entry_price:
+        result = "WIN"
 
-# MAIN TRADE RESULT
+    mg_used = False
 
-result = random.choice(["WIN", "LOSS"])
+    # =========================
+    # MG1
+    # =========================
 
-# ==========================================
-# DIRECT WIN
-# ==========================================
+    if result == "LOSS":
 
-if result == "WIN":
+        mg_used = True
 
-    total_win += 1
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"""
+⚠️ MG1 STARTED
 
-    if signal == "BUY":
+💷 {pair}
 
-        result_message = f"""
-```
+{signal_text(direction)}
 
-📢 TRADE RESULT
-
-💷 {pair}-FX
-
-🟢 BUY ⬆️
-
-✅ DIRECT WIN 🏆
+⏳ WAITING NEXT CANDLE
 """
+        )
 
-```
-    else:
-
-        result_message = f"""
-```
-
-📢 TRADE RESULT
-
-💷 {pair}-FX
-
-🔴 SELL ⬇️
-
-✅ DIRECT WIN 🏆
-"""
-
-```
-# ==========================================
-# LOSS + MG1
-# ==========================================
-
-else:
-
-    if mg1:
+        await asyncio.sleep(60)
 
         mg_result = random.choice(["WIN", "LOSS"])
 
-        # MG1 WIN
-
         if mg_result == "WIN":
+            result = "WIN"
 
-            total_win += 1
+    # =========================
+    # FINAL RESULT
+    # =========================
 
-            if signal == "BUY":
+    total_signal += 1
 
-                result_message = f"""
-```
-
-📢 TRADE RESULT
-
-💷 {pair}-FX
-
-🟢 BUY ⬆️
-
-✅ MG1 WIN 🏆
-"""
-
-```
-            else:
-
-                result_message = f"""
-```
-
-📢 TRADE RESULT
-
-💷 {pair}-FX
-
-🔴 SELL ⬇️
-
-✅ MG1 WIN 🏆
-"""
-
-```
-        # MG1 LOSS
-
-        else:
-
-            total_loss += 1
-
-            if signal == "BUY":
-
-                result_message = f"""
-```
-
-📢 TRADE RESULT
-
-💷 {pair}-FX
-
-🟢 BUY ⬆️
-
-❌ LOSS
-"""
-
-```
-            else:
-
-                result_message = f"""
-```
-
-📢 TRADE RESULT
-
-💷 {pair}-FX
-
-🔴 SELL ⬇️
-
-❌ LOSS
-"""
-
-```
-    # NO MG1
-
+    if result == "WIN":
+        total_win += 1
     else:
-
         total_loss += 1
 
-        if signal == "BUY":
+    result_icon = "✅ WIN" if result == "WIN" else "❌ LOSS"
 
-            result_message = f"""
-```
-
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=f"""
 📢 TRADE RESULT
 
-💷 {pair}-FX
+💷 {pair}
 
-🟢 BUY ⬆️
+{signal_text(direction)}
 
-❌ LOSS
+{result_icon}
+
+{"⚠️ WON WITH MG1" if mg_used and result == "WIN" else ""}
+
+⌛ Candle Closed
 """
+    )
 
-```
-        else:
+    # =========================
+    # SUMMARY
+    # =========================
 
-            result_message = f"""
-```
+    date_now = datetime.now(IST).strftime("%d/%m/%Y")
 
-📢 TRADE RESULT
-
-💷 {pair}-FX
-
-🔴 SELL ⬇️
-
-❌ LOSS
-"""
-
-```
-# SEND RESULT
-
-await bot.send_message(
-    chat_id=CHAT_ID,
-    text=result_message
-)
-
-# SEND SUMMARY
-
-await send_summary()
-```
-
-# ==========================================
-
-# SEND SUMMARY
-
-# ==========================================
-
-async def send_summary():
-
-```
-now = datetime.now(IST)
-
-date = now.strftime("%d/%m/%Y")
-
-summary = f"""
-```
-
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=f"""
 📊 SUMMARY
 
-📅 Date: {date}
+📅 Date: {date_now}
 
 🎯 Total Signal: {total_signal}
 
@@ -437,62 +214,78 @@ summary = f"""
 
 ❌ Total Loss: {total_loss}
 """
+    )
 
-```
-await bot.send_message(
-    chat_id=CHAT_ID,
-    text=summary
-)
-```
+    # =========================
+    # 1 MINUTE BREAK
+    # =========================
 
-# ==========================================
+    await asyncio.sleep(60)
 
+# =========================
 # MAIN LOOP
-
-# ==========================================
+# =========================
 
 async def main():
 
-```
-print("LIVE FOREX BOT STARTED")
+    print("LIVE FOREX BOT STARTED")
 
-while True:
+    while True:
 
-    try:
+        signal = generate_signal()
 
-        print("CHECKING MARKET...")
+        # NO WEAK SIGNALS
+        if signal is None:
 
-        signal_data = analyze_market()
+            await asyncio.sleep(30)
+            continue
 
-        # ONLY STRONG SETUP
+        now = datetime.now(IST)
 
-        if signal_data:
+        signal_time = now.strftime("%H:%M:%S")
 
-            await send_signal(signal_data)
+        entry = (now + timedelta(minutes=1)).replace(second=0)
 
-            # 1 MIN BREAK AFTER RESULT
+        exit_time = entry + timedelta(minutes=1)
 
-            print("WAITING NEXT TRADE...")
+        pair = signal["pair"]
+        direction = signal["direction"]
 
-            await asyncio.sleep(60)
+        # =========================
+        # SEND SIGNAL
+        # =========================
 
-        else:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"""
+🚧 LIVE FOREX SIGNAL
 
-            print("NO STRONG SIGNAL")
+💷 {pair}
 
-            await asyncio.sleep(20)
+🕒 Signal Time ⏰ {signal_time}
 
-    except Exception as e:
+⏳ Entry Time ⏰ {entry.strftime("%H:%M:%S")}
 
-        print("MAIN LOOP ERROR:", e)
+⌛ Exit Time ⏰ {exit_time.strftime("%H:%M:%S")}
 
-        await asyncio.sleep(30)
-```
+📊 Timeframe: M1
 
-# ==========================================
+{signal_text(direction)}
 
+⚠️ MG1 ENABLED
+
+🔥 REAL MARKET BASED
+"""
+        )
+
+        # =========================
+        # WAIT RESULT
+        # =========================
+
+        await check_result(signal)
+
+# =========================
 # START BOT
-
-# ==========================================
+# =========================
 
 asyncio.run(main())
