@@ -1,174 +1,418 @@
-import os
-import time
-import random
+```python
 import requests
+import time
 import asyncio
-import pytz
-
 from datetime import datetime, timedelta
+import pytz
 from telegram import Bot
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+# =========================
+# TELEGRAM CONFIG
+# =========================
+
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 
 bot = Bot(token=BOT_TOKEN)
 
-IST = pytz.timezone("Asia/Kolkata")
+# =========================
+# SETTINGS
+# =========================
 
-wins = 0
-losses = 0
-total = 0
+TIMEZONE = pytz.timezone("Asia/Kolkata")
 
-pairs = [
+PAIRS = [
     "EURUSD",
     "GBPUSD",
     "USDJPY",
     "EURJPY",
     "AUDUSD",
+    "USDCAD"
 ]
 
-timeframes = [1, 2, 5]
+TIMEFRAMES = {
+    "M1": 1,
+    "M2": 2,
+    "M5": 5
+}
 
+MG_ENABLED = True
 
-def get_market_price(symbol):
+total_signal = 0
+total_win = 0
+total_loss = 0
+
+# =========================
+# GET LIVE FOREX DATA
+# =========================
+
+def get_forex_data(pair):
+
+    url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval=1min&outputsize=120&apikey=demo"
+
     try:
-        url = f"https://api.exchangerate.host/live?source={symbol[:3]}"
-        response = requests.get(url, timeout=10)
+        response = requests.get(url).json()
 
-        if response.status_code == 200:
-            data = response.json()
+        candles = response["values"]
 
-            pair = symbol[:3] + symbol[3:]
+        closes = [float(x["close"]) for x in candles]
+        highs = [float(x["high"]) for x in candles]
+        lows = [float(x["low"]) for x in candles]
+        opens = [float(x["open"]) for x in candles]
 
-            if "quotes" in data:
-                for k, v in data["quotes"].items():
-                    return float(v)
-
-        return None
+        return opens, highs, lows, closes
 
     except:
         return None
 
+# =========================
+# EMA
+# =========================
 
-def generate_signal():
-    pair = random.choice(pairs)
-    timeframe = random.choice(timeframes)
+def ema(data, period):
 
-    signal = random.choice(["BUY", "SELL"])
+    multiplier = 2 / (period + 1)
 
-    return pair, timeframe, signal
+    ema_values = [sum(data[:period]) / period]
 
+    for price in data[period:]:
+        ema_values.append(
+            (price - ema_values[-1]) * multiplier + ema_values[-1]
+        )
 
-async def send_signal():
-    global wins, losses, total
+    return ema_values[-1]
 
-    pair, timeframe, signal = generate_signal()
+# =========================
+# RSI
+# =========================
 
-    now = datetime.now(IST)
+def rsi(closes, period=14):
 
-    next_minute = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    gains = []
+    losses = []
 
-    entry_time = next_minute
-    exit_time = entry_time + timedelta(minutes=timeframe)
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
 
-    signal_time = now.strftime("%H:%M:%S")
-    entry_str = entry_time.strftime("%H:%M:%S")
-    exit_str = exit_time.strftime("%H:%M:%S")
+        if diff >= 0:
+            gains.append(diff)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(diff))
 
-    message = f"""
-🚧 LIVE FOREX SIGNAL
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
 
-💷 {pair}-FX
+    if avg_loss == 0:
+        return 100
 
-Signal Time ⏰ {signal_time}
+    rs = avg_gain / avg_loss
 
-Entry ⏳ {entry_str}
+    return 100 - (100 / (1 + rs))
 
-Exit ⏳ {exit_str}
+# =========================
+# MACD
+# =========================
 
-⌚️ M{timeframe}
+def macd(closes):
 
-🟢 {signal}
+    ema12 = ema(closes, 12)
+    ema26 = ema(closes, 26)
 
-⚠️ MG1 ENABLED
-"""
+    return ema12 - ema26
 
-    print(f"SIGNAL SENT: {pair}")
+# =========================
+# STRONG TREND FILTER
+# =========================
 
-    await bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=message
-    )
+def strong_trend(closes):
 
-    wait_seconds = (exit_time - datetime.now(IST)).total_seconds()
+    ema20 = ema(closes, 20)
+    ema50 = ema(closes, 50)
 
-    if wait_seconds > 0:
-        await asyncio.sleep(wait_seconds)
+    distance = abs(ema20 - ema50)
 
-    result = random.choice(["WIN", "LOSS"])
+    return distance > 0.0005
 
-    if result == "WIN":
-        wins += 1
-    else:
-        losses += 1
+# =========================
+# SIGNAL LOGIC
+# =========================
 
-    total += 1
+def generate_signal(pair):
 
-    result_message = f"""
-✅ RESULT
+    data = get_forex_data(pair)
 
-💷 {pair}-FX
+    if not data:
+        return None
 
-{signal}
+    opens, highs, lows, closes = data
 
-{result}
-"""
+    current = closes[-1]
 
-    await bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=result_message
-    )
+    ema20 = ema(closes, 20)
+    ema50 = ema(closes, 50)
 
-    summary = f"""
-📊 SUMMARY
+    current_rsi = rsi(closes)
 
-Date: {datetime.now(IST).strftime("%d/%m/%Y")}
+    current_macd = macd(closes)
 
-Total Signal: {total}
+    bullish_candle = closes[-1] > opens[-1]
+    bearish_candle = closes[-1] < opens[-1]
 
-Total Win: {wins}
+    trend_ok = strong_trend(closes)
 
-Total Loss: {losses}
-"""
+    # =========================
+    # BUY SIGNAL
+    # =========================
 
-    await bot.send_message(
-        chat_id=CHANNEL_ID,
-        text=summary
-    )
+    if (
+        ema20 > ema50 and
+        current_rsi > 55 and
+        current_macd > 0 and
+        bullish_candle and
+        trend_ok
+    ):
 
-    print("RESULT + SUMMARY SENT")
+        return "BUY"
 
+    # =========================
+    # SELL SIGNAL
+    # =========================
 
-async def main():
+    if (
+        ema20 < ema50 and
+        current_rsi < 45 and
+        current_macd < 0 and
+        bearish_candle and
+        trend_ok
+    ):
+
+        return "SELL"
+
+    return None
+
+# =========================
+# SEND TELEGRAM
+# =========================
+
+async def send_message(text):
+
+    try:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=text,
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        print(e)
+
+# =========================
+# RESULT CHECK
+# =========================
+
+def check_result(direction, entry, exit):
+
+    if direction == "BUY":
+
+        if exit > entry:
+            return "WIN"
+        else:
+            return "LOSS"
+
+    if direction == "SELL":
+
+        if exit < entry:
+            return "WIN"
+        else:
+            return "LOSS"
+
+# =========================
+# MAIN LOOP
+# =========================
+
+async def run_bot():
+
+    global total_signal
+    global total_win
+    global total_loss
 
     print("LIVE FOREX SIGNAL BOT STARTED")
 
     while True:
 
-        try:
+        now = datetime.now(TIMEZONE)
+
+        current_second = now.second
+
+        # EXACTLY 1 MIN BEFORE
+        if current_second == 0:
 
             print("CHECKING LIVE FOREX")
 
-            await send_signal()
+            for pair in PAIRS:
 
-            await asyncio.sleep(20)
+                signal = generate_signal(pair)
 
-        except Exception as e:
+                if signal:
 
-            print("ERROR:", e)
+                    tf_name = "M5"
+                    tf_minutes = 5
 
-            await asyncio.sleep(10)
+                    entry_time = (
+                        now + timedelta(minutes=1)
+                    ).replace(second=0)
 
+                    exit_time = entry_time + timedelta(minutes=tf_minutes)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+                    signal_time = now.strftime("%H:%M:%S")
+
+                    entry_str = entry_time.strftime("%H:%M:%S")
+                    exit_str = exit_time.strftime("%H:%M:%S")
+
+                    total_signal += 1
+
+                    if signal == "BUY":
+
+                        signal_text = f"""
+🚧 <b>LIVE FOREX SIGNAL</b>
+
+💷 <b>{pair}-FX</b>
+
+Signal Time ⏰ <b>{signal_time}</b>
+
+Entry ⏳ <b>{entry_str}</b>
+
+Exit ⏳ <b>{exit_str}</b>
+
+⌚️ <b>{tf_name}</b>
+
+🟢 <b>BUY / UP</b>
+
+⚠️ <b>MG1 ENABLED</b>
+"""
+
+                    else:
+
+                        signal_text = f"""
+🚧 <b>LIVE FOREX SIGNAL</b>
+
+💷 <b>{pair}-FX</b>
+
+Signal Time ⏰ <b>{signal_time}</b>
+
+Entry ⏳ <b>{entry_str}</b>
+
+Exit ⏳ <b>{exit_str}</b>
+
+⌚️ <b>{tf_name}</b>
+
+🔴 <b>SELL / DOWN</b>
+
+⚠️ <b>MG1 ENABLED</b>
+"""
+
+                    await send_message(signal_text)
+
+                    print(f"SIGNAL SENT: {pair}")
+
+                    # WAIT FOR ENTRY
+                    wait_seconds = (
+                        entry_time - datetime.now(TIMEZONE)
+                    ).total_seconds()
+
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
+
+                    # ENTRY PRICE
+                    entry_data = get_forex_data(pair)
+
+                    entry_price = entry_data[3][-1]
+
+                    # WAIT EXIT
+                    wait_exit = (
+                        exit_time - datetime.now(TIMEZONE)
+                    ).total_seconds()
+
+                    if wait_exit > 0:
+                        await asyncio.sleep(wait_exit)
+
+                    exit_data = get_forex_data(pair)
+
+                    exit_price = exit_data[3][-1]
+
+                    result = check_result(
+                        signal,
+                        entry_price,
+                        exit_price
+                    )
+
+                    # =========================
+                    # MARTINGALE
+                    # =========================
+
+                    mg_text = ""
+
+                    if result == "LOSS" and MG_ENABLED:
+
+                        mg_text = "\n⚠️ MG1 LOSS"
+
+                        total_loss += 1
+
+                    else:
+
+                        total_win += 1
+
+                        mg_text = "\n🔥 DIRECT WIN"
+
+                    # =========================
+                    # RESULT
+                    # =========================
+
+                    result_text = f"""
+✅ <b>RESULT</b>
+
+💷 <b>{pair}-FX</b>
+
+{'🟢 BUY / UP' if signal == 'BUY' else '🔴 SELL / DOWN'}
+
+🏆 <b>{result}</b>
+
+{mg_text}
+"""
+
+                    await send_message(result_text)
+
+                    # =========================
+                    # SUMMARY
+                    # =========================
+
+                    summary = f"""
+📊 <b>SUMMARY</b>
+
+📅 Date: {now.strftime('%d/%m/%Y')}
+
+📈 Total Signal: {total_signal}
+
+✅ Total Win: {total_win}
+
+❌ Total Loss: {total_loss}
+"""
+
+                    await send_message(summary)
+
+                    # =========================
+                    # 1 MIN BREAK
+                    # =========================
+
+                    await asyncio.sleep(60)
+
+        await asyncio.sleep(1)
+
+# =========================
+# START
+# =========================
+
+asyncio.run(run_bot())
+```
